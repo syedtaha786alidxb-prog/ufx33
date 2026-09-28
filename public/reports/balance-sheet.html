@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Balance Sheet — Harbor Desk</title><link rel="stylesheet" href="/css/style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  .bs-col{border:1px solid var(--line);border-radius:8px;padding:14px 16px;}
+  .bs-col h3{margin:0 0 10px 0;font-size:13px;text-transform:uppercase;letter-spacing:0.6px;color:var(--steel);}
+  .bs-row{display:flex;justify-content:space-between;padding:5px 0;font-size:13px;border-bottom:1px solid #F0F2F4;}
+  .bs-total{display:flex;justify-content:space-between;padding:8px 0 0;font-weight:700;border-top:2px solid var(--ink);margin-top:6px;}
+</style>
+</head>
+<body>
+<div class="topnav" id="topnav"></div>
+<div class="wrap">
+  <div class="panel">
+    <div style="display:flex;justify-content:space-between;flex-wrap:wrap;align-items:flex-end;gap:12px;">
+      <div><h2>Balance Sheet</h2><p class="sub">As of a chosen month/year end — a point-in-time snapshot of Assets, Liabilities and Equity.</p></div>
+      <div style="display:flex;gap:8px;align-items:flex-end;">
+        <div class="field"><label>Month</label><select id="monthSel"></select></div>
+        <div class="field"><label>Year</label><select id="yearSel"></select></div>
+        <button class="btn btn-sm" id="runBtn">Run</button>
+        <button class="btn btn-sm" id="exportBtn">⬇ Export to Excel</button>
+        <button class="btn btn-sm" onclick="window.print()">🖨 Print</button>
+      </div>
+    </div>
+    <div class="btn-row" id="statusBox" style="background:#F7F8F9;padding:12px 16px;border-radius:8px;border:1px solid var(--line);"></div>
+    <div class="grid" style="grid-template-columns:1fr 1fr;gap:16px;align-items:flex-start;">
+      <div class="bs-col">
+        <h3>Assets</h3>
+        <div id="assetsBox"></div>
+      </div>
+      <div class="bs-col">
+        <h3>Liabilities</h3>
+        <div id="liabBox"></div>
+        <h3 style="margin-top:18px;">Equity</h3>
+        <div id="equityBox"></div>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="/js/api.js"></script>
+<script>
+renderTopNav("reports/balance-sheet.html");
+let lastData = null;
+const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+
+function lastDayOf(year, month) { return new Date(year, month+1, 0).toISOString().slice(0,10); }
+
+function init() {
+  const now = new Date();
+  document.getElementById("monthSel").innerHTML = MONTHS.map((m,i)=>`<option value="${i}" ${i===now.getMonth()?"selected":""}>${m}</option>`).join("");
+  const years = [];
+  for (let y = now.getFullYear()-3; y <= now.getFullYear()+1; y++) years.push(y);
+  document.getElementById("yearSel").innerHTML = years.map(y=>`<option value="${y}" ${y===now.getFullYear()?"selected":""}>${y}</option>`).join("");
+  run();
+}
+async function run() {
+  const month = Number(document.getElementById("monthSel").value);
+  const year = Number(document.getElementById("yearSel").value);
+  const asOf = lastDayOf(year, month);
+  const data = await api("GET", `/api/reports/balance-sheet?asOf=${asOf}`);
+  lastData = data;
+  const rowsHtml = (rows) => rows.map(r => `<div class="bs-row"><span>${r.code} — ${r.name}</span><span class="mono">${fmt(r.balance)}</span></div>`).join("") || `<div class="sub">No balance.</div>`;
+  document.getElementById("assetsBox").innerHTML = rowsHtml(data.assets) + `<div class="bs-total"><span>Total Assets</span><span class="mono">${fmt(data.totalAssets)}</span></div>`;
+  document.getElementById("liabBox").innerHTML = rowsHtml(data.liabilities) + `<div class="bs-total"><span>Total Liabilities</span><span class="mono">${fmt(data.totalLiabilities)}</span></div>`;
+  document.getElementById("equityBox").innerHTML = rowsHtml(data.equity) +
+    `<div class="bs-row"><span>Current Year Earnings</span><span class="mono">${fmt(data.currentYearEarnings)}</span></div>` +
+    `<div class="bs-total"><span>Total Equity</span><span class="mono">${fmt(data.totalEquity)}</span></div>`;
+  const balanced = data.balanced;
+  document.getElementById("statusBox").innerHTML = `
+    <div>As of: <b>${data.asOf}</b></div>
+    <div>Assets: <b class="mono">${fmt(data.totalAssets)}</b></div>
+    <div>Liabilities + Equity: <b class="mono">${fmt(data.totalLiabilities + data.totalEquity)}</b></div>
+    <div><b style="color:${balanced?'#1F8A5F':'#C1442D'};">${balanced?'Balanced ✓':'Out of balance'}</b></div>`;
+}
+document.getElementById("runBtn").onclick = run;
+document.getElementById("exportBtn").onclick = () => {
+  if (!lastData) return;
+  const rows = [
+    { Section: "ASSETS", Code: "", Name: "", Balance: "" },
+    ...lastData.assets.map(r => ({ Section: "", Code: r.code, Name: r.name, Balance: r.balance })),
+    { Section: "", Code: "", Name: "Total Assets", Balance: lastData.totalAssets },
+    { Section: "LIABILITIES", Code: "", Name: "", Balance: "" },
+    ...lastData.liabilities.map(r => ({ Section: "", Code: r.code, Name: r.name, Balance: r.balance })),
+    { Section: "", Code: "", Name: "Total Liabilities", Balance: lastData.totalLiabilities },
+    { Section: "EQUITY", Code: "", Name: "", Balance: "" },
+    ...lastData.equity.map(r => ({ Section: "", Code: r.code, Name: r.name, Balance: r.balance })),
+    { Section: "", Code: "", Name: "Current Year Earnings", Balance: lastData.currentYearEarnings },
+    { Section: "", Code: "", Name: "Total Equity", Balance: lastData.totalEquity },
+  ];
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Balance Sheet");
+  XLSX.writeFile(wb, `balance-sheet-${lastData.asOf}.xlsx`);
+};
+init();
+</script>
+</body>
+</html>

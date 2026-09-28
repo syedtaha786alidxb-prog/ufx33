@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Credit Notes — Harbor Desk</title><link rel="stylesheet" href="/css/style.css"></head>
+<body>
+<div class="topnav" id="topnav"></div>
+<div class="wrap">
+  <div class="panel">
+    <h2>New Credit Note</h2>
+    <p class="sub">Reduces a client's receivable — picking an invoice adjusts that invoice directly; leave it blank for a general credit.</p>
+    <div class="grid">
+      <div class="field"><label>Client *</label><input id="cnClient" oninput="onCnClientChange()"></div>
+      <div class="field"><label>Invoice <span class="sub" style="font-weight:400;">(optional)</span></label><select id="cnInvoice"><option value="">— No specific invoice —</option></select></div>
+      <div class="field"><label>Date</label><input type="date" id="cnDate"></div>
+      <div class="field"><label>Amount *</label><input type="number" id="cnAmount" min="0" step="0.01"></div>
+      <div class="field"><label>Reduces Account *</label><select id="cnAccount"></select></div>
+      <div class="field" style="grid-column:span 2;"><label>Reason</label><input id="cnReason" placeholder="e.g. Rate correction, goodwill discount"></div>
+    </div>
+    <div class="btn-row"><button class="btn btn-teal" id="cnSaveBtn">Save Credit Note</button></div>
+  </div>
+
+  <div class="panel">
+    <div style="display:flex;justify-content:space-between;flex-wrap:wrap;align-items:flex-end;">
+      <h2>Credit Notes</h2>
+      <button class="btn btn-sm" onclick="window.print()">🖨 Print</button>
+    </div>
+    <table><thead><tr><th>CN #</th><th>Client</th><th>Invoice</th><th>Date</th><th class="num">Amount</th><th>Reason</th><th></th></tr></thead>
+      <tbody id="rows"></tbody></table>
+  </div>
+</div>
+<div id="modalRoot"></div>
+<script src="/js/api.js"></script>
+<script>
+renderTopNav("accounting/credit-notes.html");
+let parties = [], invoices = [], accounts = [], allNotes = [];
+
+async function onCnClientChange() {
+  const name = document.getElementById("cnClient").value.trim();
+  const clientInvoices = invoices.filter(i => i.client.toLowerCase() === name.toLowerCase() && !i.settled);
+  document.getElementById("cnInvoice").innerHTML = `<option value="">— No specific invoice —</option>` +
+    clientInvoices.map(i => `<option value="${i.id}">${i.txn} — outstanding ${fmt(i.amount-i.settled_amount)}</option>`).join("");
+}
+document.getElementById("cnSaveBtn").onclick = async () => {
+  const client = document.getElementById("cnClient").value.trim();
+  const amount = Number(document.getElementById("cnAmount").value);
+  if (!client || !amount) return toast("Enter client and amount", "error");
+  try {
+    const note = await api("POST", "/api/credit-notes", {
+      client, invoice_id: document.getElementById("cnInvoice").value || null,
+      date: document.getElementById("cnDate").value, amount,
+      account_code: document.getElementById("cnAccount").value,
+      reason: document.getElementById("cnReason").value.trim(),
+    });
+    toast("Credit note saved", "success");
+    document.getElementById("cnAmount").value = ""; document.getElementById("cnReason").value = "";
+    await load();
+    printNote(note.id);
+  } catch(e){ toast(e.message, "error"); }
+};
+async function load() {
+  allNotes = await api("GET", "/api/credit-notes");
+  document.getElementById("rows").innerHTML = allNotes.map(n => `
+    <tr><td class="mono">${n.cn_no}</td><td>${esc(n.client)}</td><td class="mono">${n.invoice_txn||"—"}</td><td>${n.date}</td>
+      <td class="num mono">${fmt(n.amount)}</td><td>${esc(n.reason)||"—"}</td>
+      <td style="display:flex;gap:4px;">
+        <button class="btn btn-sm" onclick="editNote(${n.id})">Edit</button>
+        <button class="btn btn-sm" onclick="printNote(${n.id})">🖨</button>
+        <button class="btn btn-sm" onclick="deleteNote(${n.id})">✕</button>
+      </td></tr>`).join("") || `<tr><td colspan="7"><div class="empty">No credit notes yet.</div></td></tr>`;
+}
+window.editNote = (id) => {
+  const n = allNotes.find(n => n.id === id);
+  const root = document.getElementById("modalRoot");
+  root.innerHTML = `
+    <div class="modal-backdrop">
+      <div class="modal">
+        <h3>Edit Credit Note ${n.cn_no}</h3>
+        <p class="sub">Amount and account are fixed once posted — delete and re-issue if those need to change.</p>
+        <div class="field" style="margin-bottom:12px;"><label>Date</label><input type="date" id="ecnDate" value="${n.date}"></div>
+        <div class="field" style="margin-bottom:16px;"><label>Reason</label><input id="ecnReason" value="${esc(n.reason)}"></div>
+        <div class="btn-row" style="margin-top:0;"><button class="btn" id="ecnCancel">Cancel</button><button class="btn btn-teal" id="ecnSave">Save</button></div>
+      </div>
+    </div>`;
+  document.getElementById("ecnCancel").onclick = () => { root.innerHTML = ""; };
+  document.getElementById("ecnSave").onclick = async () => {
+    try {
+      await api("PUT", `/api/credit-notes/${id}`, { date: document.getElementById("ecnDate").value, reason: document.getElementById("ecnReason").value.trim() });
+      toast("Credit note updated", "success");
+      root.innerHTML = ""; load();
+    } catch(e){ toast(e.message, "error"); }
+  };
+};
+window.deleteNote = async (id) => {
+  const n = allNotes.find(n => n.id === id);
+  const reason = await confirmWithReason("Delete Credit Note", `This reverses ${n.cn_no}'s ledger entry${n.invoice_txn ? ` and restores the outstanding balance on ${n.invoice_txn}` : ""}.`);
+  if (!reason) return;
+  try { await api("DELETE", `/api/credit-notes/${id}`, { reason }); toast("Credit note deleted", "success"); load(); }
+  catch(e){ toast(e.message, "error"); }
+};
+window.printNote = async (id) => {
+  const n = allNotes.find(n => n.id === id);
+  const company = await getCompanyProfile();
+  const win = window.open("", "_blank");
+  win.document.write(`
+    <html><head><title>Credit Note ${n.cn_no}</title>
+    <style>body{font-family:Arial,sans-serif;color:#1C2A36;padding:36px;max-width:640px;margin:0 auto;}
+    table{width:100%;border-collapse:collapse;margin-top:16px;font-size:13px;}
+    td{padding:8px 0;border-bottom:1px solid #E5E9EC;} td:first-child{color:#5B6B78;width:160px;}
+    .total{font-size:16px;font-weight:700;margin-top:16px;}</style></head>
+    <body>
+      ${letterheadHtml(company, "Credit Note", n.cn_no)}
+      <table>
+        <tr><td>Client</td><td>${esc(n.client)}</td></tr>
+        <tr><td>Date</td><td>${n.date}</td></tr>
+        <tr><td>Against Invoice</td><td>${n.invoice_txn||"— General credit —"}</td></tr>
+        <tr><td>Reason</td><td>${esc(n.reason)||"—"}</td></tr>
+      </table>
+      <div class="total">Amount: ${fmt(n.amount)}</div>
+      <div style="margin-top:60px;font-size:12px;">Authorized By: ____________________</div>
+      ${letterheadFooterHtml(company)}
+    </body></html>`);
+  win.document.close(); win.focus();
+  setTimeout(() => win.print(), 300);
+};
+(async function init() {
+  parties = await api("GET", "/api/parties");
+  invoices = await api("GET", "/api/receivables");
+  accounts = await api("GET", "/api/accounts");
+  document.getElementById("cnAccount").innerHTML = accounts.filter(a=>a.type==="Income"||a.type==="Expense").map(a=>`<option value="${a.code}">${a.code} — ${a.name}</option>`).join("");
+  document.getElementById("cnDate").value = new Date().toISOString().slice(0,10);
+  attachAutocomplete(document.getElementById("cnClient"), () => parties.filter(p=>p.is_client).map(p => ({ label: p.name, sub: p.code||"" })), onCnClientChange);
+  await load();
+})();
+</script>
+</body>
+</html>

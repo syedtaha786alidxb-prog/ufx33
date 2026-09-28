@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Charge Codes — Harbor Desk</title><link rel="stylesheet" href="/css/style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  .modal-backdrop{position:fixed;inset:0;background:rgba(11,29,46,.55);display:flex;align-items:center;justify-content:center;z-index:60;padding:20px;overflow-y:auto;}
+  .modal{background:#fff;border-radius:10px;padding:24px 26px;max-width:420px;width:100%;margin:auto;}
+  .modal h3{margin:0 0 4px 0;font-size:16px;}
+</style>
+</head>
+<body>
+<div class="topnav" id="topnav"></div>
+<div class="wrap">
+  <div class="panel">
+    <div style="display:flex;justify-content:space-between;flex-wrap:wrap;">
+      <div><h2>Charge Codes</h2><p class="sub">Every charge used in Job → Charges posts to the GL account linked here.</p></div>
+      <div style="display:flex;gap:8px;"><button class="btn btn-sm" onclick="window.print()">🖨 Print</button><button class="btn btn-sm btn-teal" id="newBtn">+ New Charge Code</button></div>
+    </div>
+    <table><thead><tr><th>Code</th><th>Name</th><th>Posts To (GL Account)</th><th></th></tr></thead>
+      <tbody id="rows"></tbody></table>
+  </div>
+
+  <div class="panel">
+    <h2>Bulk Upload — Excel</h2>
+    <p class="sub">Download the template, fill it in (Account code must already exist in Chart of Accounts), then upload.</p>
+    <div class="btn-row" style="margin-top:0;">
+      <button class="btn btn-sm" id="downloadTemplateBtn">⬇ Download Template</button>
+      <input type="file" id="excelFile" accept=".xlsx,.xls,.csv" style="max-width:260px;">
+      <button class="btn btn-sm btn-primary" id="excelUploadBtn">Upload Excel</button>
+    </div>
+    <div id="excelResult"></div>
+  </div>
+</div>
+<div id="modalRoot"></div>
+<script src="/js/api.js"></script>
+<script>
+let allowDelete = false;
+let accounts = [];
+async function load() {
+  accounts = await api("GET", "/api/accounts");
+  const items = await api("GET", "/api/charge-codes");
+  document.getElementById("rows").innerHTML = items.map(c => `
+    <tr><td class="mono">${esc(c.code)}</td><td>${esc(c.name)}</td><td class="mono">${esc(c.account_code)} — ${esc(c.account_name)||''}</td>
+      <td>${allowDelete ? `<button class="btn btn-sm" onclick="delItem('${esc(c.code)}')">✕</button>` : ""}</td></tr>`).join("")
+    || `<tr><td colspan="4"><div class="empty">No charge codes yet.</div></td></tr>`;
+}
+function openNewForm() {
+  const root = document.getElementById("modalRoot");
+  root.innerHTML = `
+    <div class="modal-backdrop">
+      <div class="modal">
+        <h3>New Charge Code</h3>
+        <p class="sub">Define a charge and which GL account it posts revenue to.</p>
+        <div class="field" style="margin-bottom:12px;"><label>Code *</label><input id="ccCode" class="mono" placeholder="e.g. SLOT"></div>
+        <div class="field" style="margin-bottom:12px;"><label>Name *</label><input id="ccName" placeholder="e.g. Slot Charges"></div>
+        <div class="field" style="margin-bottom:18px;"><label>Posts To (GL Account) *</label>
+          <select id="ccAccount">${accounts.map(a=>`<option value="${a.code}">${a.code} — ${esc(a.name)} (${a.type})</option>`).join("")}</select>
+        </div>
+        <div class="btn-row" style="margin-top:0;"><button class="btn" id="cancelBtn">Cancel</button><button class="btn btn-teal" id="saveBtn">Add Charge Code</button></div>
+      </div>
+    </div>`;
+  document.getElementById("cancelBtn").onclick = () => { root.innerHTML = ""; };
+  document.getElementById("saveBtn").onclick = async () => {
+    const code = document.getElementById("ccCode").value.trim();
+    const name = document.getElementById("ccName").value.trim();
+    const account_code = document.getElementById("ccAccount").value;
+    if (!code || !name) return toast("Enter a code and name", "error");
+    try { await api("POST", "/api/charge-codes", { code, name, account_code }); toast("Charge code added","success"); root.innerHTML=""; load(); }
+    catch(e){ toast(e.message,"error"); }
+  };
+}
+document.getElementById("newBtn").onclick = openNewForm;
+window.delItem = async (code) => {
+  if (!confirm("Delete this charge code?")) return;
+  try { await api("DELETE", `/api/charge-codes/${code}`); toast("Deleted","success"); load(); }
+  catch(e){ toast(e.message,"error"); }
+};
+
+document.getElementById("downloadTemplateBtn").onclick = () => {
+  const headers = ["Code", "Name", "Account Code"];
+  const sample = [["THC", "Terminal Handling Charges", "4000"], ["DOC", "Documentation Fee", "4000"]];
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...sample]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Charge Codes");
+  XLSX.writeFile(wb, "charge_codes_template.xlsx");
+};
+function readSheet(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const wb = XLSX.read(new Uint8Array(e.target.result), { type: "array" });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        resolve(XLSX.utils.sheet_to_json(ws, { defval: "" }));
+      } catch (err) { reject(err); }
+    };
+    reader.onerror = reject;
+    reader.readAsArrayBuffer(file);
+  });
+}
+function getField(row, ...keys) {
+  const found = Object.keys(row).find(k => keys.includes(k.toLowerCase().trim()));
+  return found ? row[found] : "";
+}
+document.getElementById("excelUploadBtn").onclick = async () => {
+  const file = document.getElementById("excelFile").files[0];
+  if (!file) return toast("Choose a file first", "error");
+  const json = await readSheet(file);
+  const rows = json.map(r => ({
+    code: String(getField(r, "code")).trim(),
+    name: String(getField(r, "name")).trim(),
+    account_code: String(getField(r, "account code", "account_code")).trim(),
+  })).filter(r => r.code);
+  if (!rows.length) return toast("No valid rows found", "error");
+  try {
+    const result = await api("POST", "/api/charge-codes/bulk", { rows });
+    document.getElementById("excelResult").innerHTML = `<div class="empty" style="border-style:solid;">Added ${result.added}.${result.skipped.length ? ` Skipped ${result.skipped.length}: ` + result.skipped.map(s=>`${s.code} (${s.reason})`).join(", ") : ""}</div>`;
+    toast("Excel upload complete", "success");
+    load();
+  } catch(e){ toast(e.message, "error"); }
+};
+(async function init() {
+  const me = await renderTopNav("admin/charge-codes.html");
+  allowDelete = canDelete(me);
+  load();
+})();
+</script>
+</body>
+</html>

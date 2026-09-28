@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Vessels &amp; Voyages — Harbor Desk</title><link rel="stylesheet" href="/css/style.css">
+<style>
+  .modal-backdrop{position:fixed;inset:0;background:rgba(11,29,46,.55);display:flex;align-items:center;justify-content:center;z-index:60;padding:20px;overflow-y:auto;}
+  .modal{background:#fff;border-radius:10px;padding:24px 26px;max-width:420px;width:100%;margin:auto;}
+  .modal.modal-wide{max-width:640px;}
+  .modal h3{margin:0 0 4px 0;font-size:16px;}
+  .voyage-chip{margin-right:6px;margin-bottom:6px;display:inline-flex;align-items:center;gap:6px;}
+  .camp-row{border:1px solid var(--line);border-radius:9px;padding:14px 16px;margin-bottom:12px;}
+  .camp-row .head{display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;}
+  .camp-actions{display:flex;gap:6px;flex-wrap:wrap;}
+  .badge-running{background:#E7F5EE;color:#1F8A5F;}
+  .badge-stopped{background:#FBEAE6;color:#C1442D;}
+  .badge-draft{background:#FDF2E3;color:#9A5B00;}
+  .report-box{margin-top:10px;padding-top:10px;border-top:1px dashed var(--line);font-size:12.5px;}
+  .recip-list{max-height:220px;overflow-y:auto;border:1px solid var(--line);border-radius:6px;margin-top:6px;}
+  .recip-list table{margin-top:0;}
+  .port-row{display:grid;grid-template-columns:1fr 150px 32px;gap:8px;margin-bottom:8px;align-items:center;}
+  .port-row-remove{background:none;border:none;color:var(--red);font-size:18px;cursor:pointer;padding:0;}
+</style>
+</head>
+<body>
+<div class="topnav" id="topnav"></div>
+<div class="wrap">
+  <div class="panel">
+    <div style="display:flex;justify-content:space-between;flex-wrap:wrap;">
+      <div><h2>Vessels &amp; Voyages</h2><p class="sub">Link a vendor (carrier) to each vessel, add voyages, and close a voyage financially once accounted.</p></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn btn-sm btn-teal" id="newScheduleBtn">📅 Vessel Schedule Email</button>
+        <button class="btn btn-sm btn-violet" id="newVesselBtn">+ New Vessel</button>
+      </div>
+    </div>
+    <div id="list"></div>
+  </div>
+  <div class="panel" id="plPanel" style="display:none;"></div>
+  <div class="panel">
+    <h2>Vessel Schedule Emails</h2>
+    <p class="sub">Marketing / schedule updates sent to clients for a specific vessel &amp; voyage — one-off ("Send Now") or on a recurring schedule via your SMTP (Outlook/Office365 works if configured under Admin → Settings).</p>
+    <div id="campaignList"></div>
+  </div>
+</div>
+<div id="modalRoot"></div>
+<script src="/js/api.js"></script>
+<script>
+let allowDelete = false;
+let vendorParties = [];
+let allVessels = [];
+
+async function load() {
+  vendorParties = (await api("GET", "/api/parties")).filter(p => p.is_vendor);
+  allVessels = await api("GET", "/api/vessels");
+  document.getElementById("list").innerHTML = allVessels.map(v => `
+    <div style="border:1px solid var(--line);border-radius:9px;padding:14px 16px;margin-bottom:12px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:8px;">
+        <div><b>🚢 ${esc(v.name)}</b> <span class="sub">— Carrier: ${esc(v.vendor_name) || "not set"}</span></div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;">
+          <button class="btn btn-sm" onclick="openSetCarrier(${v.id})">Set Carrier</button>
+          <button class="btn btn-sm btn-violet" onclick="openAddVoyage(${v.id}, '${v.name.replace(/'/g,"\\'")}')">+ Add Voyage</button>
+          ${allowDelete ? `<button class="btn btn-sm" onclick="delVessel(${v.id})">Remove Vessel</button>` : ""}
+        </div>
+      </div>
+      <div>${v.voyages.length ? v.voyages.map(voy=>`
+        <span class="badge ${voy.closed?'badge-settled':'badge-unsettled'} voyage-chip mono">
+          ${voy.no} (ETD ${voy.etd||'—'} · ETA ${voy.eta||'—'}${voy.cut_off?' · Cut-off '+voy.cut_off:''}${voy.rotation_no?' · Rot# '+voy.rotation_no:''}) ${voy.closed?'· Closed':''}
+          <a href="#" onclick="viewPl(${voy.id});return false;" style="color:#0E7C86;font-weight:700;">P&amp;L</a>
+          <a href="#" onclick="toggleClose(${voy.id}, ${voy.closed});return false;" style="color:#9C7A17;font-weight:700;">${voy.closed?'Reopen':'Close'}</a>
+          ${allowDelete ? `<a href="#" onclick="delVoyage(${voy.id});return false;" style="color:#C1442D;font-weight:700;">✕</a>` : ""}
+        </span>`).join("") : `<span class="sub">No voyages yet.</span>`}</div>
+    </div>`).join("") || `<div class="empty">No vessels yet.</div>`;
+}
+
+function closeModal(){ document.getElementById("modalRoot").innerHTML = ""; }
+
+function openNewVesselForm() {
+  const root = document.getElementById("modalRoot");
+  root.innerHTML = `
+    <div class="modal-backdrop">
+      <div class="modal">
+        <h3>New Vessel</h3><p class="sub">Add a vessel and optionally its carrier (vendor) right away.</p>
+        <div class="field" style="margin-bottom:12px;"><label>Vessel Name *</label><input id="nvName" placeholder="e.g. WAN HAI 316"></div>
+        <div class="field" style="margin-bottom:18px;"><label>Carrier (Vendor)</label>
+          <select id="nvVendor"><option value="">— Not set —</option>${vendorParties.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join("")}</select>
+        </div>
+        <div class="btn-row" style="margin-top:0;"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn btn-violet" id="saveVesselBtn">Add Vessel</button></div>
+      </div>
+    </div>`;
+  document.getElementById("saveVesselBtn").onclick = async () => {
+    const name = document.getElementById("nvName").value.trim();
+    const vendor_party_id = document.getElementById("nvVendor").value || null;
+    if (!name) return toast("Enter a vessel name", "error");
+    try { await api("POST", "/api/vessels", { name, vendor_party_id }); toast("Vessel added","success"); closeModal(); load(); }
+    catch(e){ toast(e.message, "error"); }
+  };
+}
+document.getElementById("newVesselBtn").onclick = openNewVesselForm;
+
+window.openSetCarrier = (vesselId) => {
+  const v = allVessels.find(v=>v.id===vesselId);
+  const root = document.getElementById("modalRoot");
+  root.innerHTML = `
+    <div class="modal-backdrop">
+      <div class="modal">
+        <h3>Set Carrier</h3><p class="sub">Vessel: <b>${esc(v.name)}</b></p>
+        <div class="field" style="margin-bottom:18px;"><label>Carrier (Vendor)</label>
+          <select id="scVendor"><option value="">— Not set —</option>${vendorParties.map(p=>`<option value="${p.id}" ${p.id===v.vendor_party_id?"selected":""}>${esc(p.name)}</option>`).join("")}</select>
+        </div>
+        <div class="btn-row" style="margin-top:0;"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn btn-violet" id="saveCarrierBtn">Save</button></div>
+      </div>
+    </div>`;
+  document.getElementById("saveCarrierBtn").onclick = async () => {
+    const vendor_party_id = document.getElementById("scVendor").value || null;
+    await api("PUT", `/api/vessels/${vesselId}`, { vendor_party_id });
+    toast("Carrier set", "success"); closeModal(); load();
+  };
+};
+
+window.openAddVoyage = (vesselId, vesselName) => {
+  const root = document.getElementById("modalRoot");
+  root.innerHTML = `
+    <div class="modal-backdrop">
+      <div class="modal">
+        <h3>Add Voyage</h3><p class="sub">Vessel: <b>${vesselName}</b>. You can add multiple voyages for this same vessel over time.</p>
+        <div class="field" style="margin-bottom:12px;"><label>Voyage # *</label><input id="avNo" placeholder="e.g. W219"></div>
+        <div class="field" style="margin-bottom:12px;"><label>Rotation Number <span class="sub" style="font-weight:400;">(must be unique)</span></label><input id="avRotation" placeholder="e.g. 001E"></div>
+        <div class="field" style="margin-bottom:12px;"><label>ETD</label><input type="date" id="avEtd" value="${new Date().toISOString().slice(0,10)}"></div>
+        <div class="field" style="margin-bottom:12px;"><label>ETA</label><input type="date" id="avEta" value="${new Date().toISOString().slice(0,10)}"></div>
+        <div class="field" style="margin-bottom:18px;"><label>Cut-off (optional)</label><input type="date" id="avCutOff"></div>
+        <div class="btn-row" style="margin-top:0;"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn btn-violet" id="saveVoyageBtn">Add Voyage</button></div>
+      </div>
+    </div>`;
+  document.getElementById("saveVoyageBtn").onclick = async () => {
+    const no = document.getElementById("avNo").value.trim();
+    if (!no) return toast("Enter a voyage number", "error");
+    try {
+      await api("POST", `/api/vessels/${vesselId}/voyages`, {
+        no, etd: document.getElementById("avEtd").value, eta: document.getElementById("avEta").value,
+        cut_off: document.getElementById("avCutOff").value || null,
+        rotation_no: document.getElementById("avRotation").value.trim()
+      });
+      toast("Voyage added","success"); closeModal(); load();
+    } catch(e){ toast(e.message, "error"); }
+  };
+};
+
+window.delVessel = async (id) => {
+  if (!confirm("Remove this vessel and all its voyages?")) return;
+  try { await api("DELETE", `/api/vessels/${id}`); toast("Vessel removed","success"); load(); }
+  catch(e){ toast(e.message, "error"); }
+};
+window.delVoyage = async (id) => {
+  if (!confirm("Remove this voyage?")) return;
+  try { await api("DELETE", `/api/voyages/${id}`); toast("Voyage removed","success"); load(); }
+  catch(e){ toast(e.message, "error"); }
+};
+window.toggleClose = async (id, currentlyClosed) => {
+  await api("POST", `/api/voyages/${id}/${currentlyClosed?'reopen':'close'}`);
+  toast(currentlyClosed ? "Voyage reopened" : "Voyage closed", "success");
+  load();
+};
+window.viewPl = async (voyageId) => {
+  const pl = await api("GET", `/api/voyages/${voyageId}/pl`);
+  const panel = document.getElementById("plPanel");
+  panel.style.display = "block";
+  panel.innerHTML = `
+    <h2>Voyage P&amp;L — ${pl.voyage.no}</h2>
+    <p class="sub">${pl.jobCount} job(s) on this voyage.</p>
+    <div class="kpi-grid">
+      <div class="kpi"><span>Revenue</span><b class="mono">${fmt(pl.revenue)}</b></div>
+      <div class="kpi"><span>Cost</span><b class="mono">${fmt(pl.cost)}</b></div>
+      <div class="kpi"><span>Profit</span><b class="mono" style="color:${pl.profit<0?'#C1442D':'#1F8A5F'}">${fmt(pl.profit)}</b></div>
+    </div>`;
+  panel.scrollIntoView({ behavior: "smooth" });
+};
+/* ------------------------------------------------------------------ */
+/* Vessel Schedule Emails — marketing / schedule-update campaigns      */
+/* ------------------------------------------------------------------ */
+let ports = [];
+let campaigns = [];
+let expandedReportId = null;
+
+async function loadPorts() {
+  if (ports.length) return;
+  ports = await api("GET", "/api/ports");
+}
+
+function autoTimes(startTime, timesPerDay) {
+  const n = Math.max(1, Math.min(12, parseInt(timesPerDay, 10) || 1));
+  const [h, m] = (startTime || "09:00").split(":").map(Number);
+  const startMin = (h || 0) * 60 + (m || 0);
+  const interval = Math.floor((24 * 60) / n);
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const total = (startMin + i * interval) % (24 * 60);
+    out.push(`${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`);
+  }
+  return out;
+}
+
+function statusBadge(c) {
+  if (c.is_running) return `<span class="badge badge-running">● Running</span>`;
+  if (c.started_at) return `<span class="badge badge-stopped">Stopped</span>`;
+  return `<span class="badge badge-draft">Draft</span>`;
+}
+
+async function loadCampaigns() {
+  campaigns = await api("GET", "/api/vessel-campaigns");
+  const el = document.getElementById("campaignList");
+  if (!campaigns.length) { el.innerHTML = `<div class="empty">No vessel schedule emails yet. Click "📅 Vessel Schedule Email" above to create one.</div>`; return; }
+  el.innerHTML = campaigns.map(c => `
+    <div class="camp-row">
+      <div class="head">
+        <div>
+          <b>🚢 ${c.vessel_name} — ${c.voyage_no}</b> ${statusBadge(c)}
+          <div class="sub">${(c.pol_list||[]).map(p=>`${p.port} (ETA ${p.eta||"—"})`).join(", ") || c.pol || "—"} → ${(c.pod_list||[]).map(p=>`${p.port} (ETA ${p.eta||"—"})`).join(", ") || c.pod || "—"} · ETD ${c.etd || "—"}</div>
+          <div class="sub">"${c.subject}" · ${c.recipient_count} recipient(s) in To · created by ${c.created_by_username || "—"}</div>
+          ${c.schedule_start_date ? `<div class="sub">Schedule: from ${c.schedule_start_date}, times ${c.send_times.join(", ") || "—"}${c.is_running ? ` · started by ${c.started_by_username} at ${c.started_at}` : ""}</div>` : ""}
+          <div class="sub">✅ Sent: ${c.sent_count}&nbsp;&nbsp;❌ Failed: ${c.failed_count}</div>
+        </div>
+        <div class="camp-actions">
+          <button class="btn btn-sm" onclick="viewCampaignReport(${c.id})">${expandedReportId === c.id ? "Hide" : "View"} Report</button>
+          <button class="btn btn-sm btn-teal" onclick="sendCampaignNow(${c.id})">Send Now</button>
+          ${c.is_running
+            ? `<button class="btn btn-sm btn-gold" onclick="stopCampaign(${c.id})">⏸ Stop</button>`
+            : `<button class="btn btn-sm btn-violet" onclick="startCampaign(${c.id})">▶ Start</button>`}
+          ${allowDelete ? `<button class="btn btn-sm" onclick="deleteCampaign(${c.id})">Delete</button>` : ""}
+        </div>
+      </div>
+      <div id="report-${c.id}"></div>
+    </div>`).join("");
+  if (expandedReportId) renderCampaignReport(expandedReportId);
+}
+
+window.viewCampaignReport = async (id) => {
+  if (expandedReportId === id) { expandedReportId = null; document.getElementById(`report-${id}`).innerHTML = ""; return; }
+  expandedReportId = id;
+  await loadCampaigns();
+};
+
+async function renderCampaignReport(id) {
+  const box = document.getElementById(`report-${id}`);
+  if (!box) return;
+  box.innerHTML = `<div class="report-box sub">Loading report…</div>`;
+  const detail = await api("GET", `/api/vessel-campaigns/${id}`);
+  const userRows = Object.entries(detail.by_user).map(([u, s]) => `<tr><td>${u}</td><td class="num">${s.sent}</td><td class="num">${s.failed}</td></tr>`).join("") || `<tr><td colspan="3" class="sub">No sends yet.</td></tr>`;
+  const logRows = detail.logs.slice(0, 500).map(l => `<tr><td>${l.to_email}</td><td>${l.status === "sent" ? "✅ Sent" : "❌ Failed"}</td><td class="sub">${l.ts}</td></tr>`).join("") || `<tr><td colspan="3" class="sub">No sends yet.</td></tr>`;
+  box.innerHTML = `
+    <div class="report-box">
+      <b>Sent, user-wise</b>
+      <table><thead><tr><th>User</th><th class="num">Sent</th><th class="num">Failed</th></tr></thead><tbody>${userRows}</tbody></table>
+      <b style="display:block;margin-top:10px;">Delivery report (per address)</b>
+      <p class="sub" style="margin:2px 0 0;">Shows send/failure status returned by the mail server. Plain SMTP can't reliably confirm a recipient actually opened the email, so "received" here means accepted by their mail server, not a read receipt.</p>
+      <div class="recip-list"><table><thead><tr><th>Email</th><th>Status</th><th>Time</th></tr></thead><tbody>${logRows}</tbody></table></div>
+    </div>`;
+}
+
+window.sendCampaignNow = async (id) => {
+  if (!confirm("Send this email now to everyone in the To/Cc/Bcc lists?")) return;
+  try {
+    const r = await api("POST", `/api/vessel-campaigns/${id}/send-now`);
+    toast(`Sent: ${r.sent} ok, ${r.failed} failed`, r.failed ? "error" : "success");
+    await loadCampaigns();
+  } catch (e) { toast(e.message, "error"); }
+};
+window.startCampaign = async (id) => {
+  try { await api("POST", `/api/vessel-campaigns/${id}/start`); toast("Schedule started", "success"); loadCampaigns(); }
+  catch (e) { toast(e.message, "error"); }
+};
+window.stopCampaign = async (id) => {
+  try { await api("POST", `/api/vessel-campaigns/${id}/stop`); toast("Schedule stopped", "success"); loadCampaigns(); }
+  catch (e) { toast(e.message, "error"); }
+};
+window.deleteCampaign = async (id) => {
+  if (!confirm("Delete this vessel schedule email? This cannot be undone.")) return;
+  try { await api("DELETE", `/api/vessel-campaigns/${id}`); toast("Deleted", "success"); if (expandedReportId === id) expandedReportId = null; loadCampaigns(); }
+  catch (e) { toast(e.message, "error"); }
+};
+
+async function openVesselScheduleForm() {
+  await loadPorts();
+  const openVoyages = allVessels.map(v => ({ ...v, voyages: v.voyages.filter(voy => !voy.closed) })).filter(v => v.voyages.length);
+  const portOpts = `<option value="">Select port...</option>` + ports.map(p => `<option value="${p.name}">${p.name} (${p.locode || ""}) — ${p.country || ""}</option>`).join("");
+  const root = document.getElementById("modalRoot");
+  root.innerHTML = `
+    <div class="modal-backdrop">
+      <div class="modal modal-wide">
+        <h3>Vessel Schedule Email</h3>
+        <p class="sub">Pick a vessel &amp; voyage (closed voyages are hidden), then set up the marketing email and, optionally, its send schedule.</p>
+
+        <div class="grid" style="margin-bottom:12px;">
+          <div class="field"><label>Vessel *</label><select id="vsVessel"><option value="">Select vessel...</option>${openVoyages.map(v => `<option value="${v.id}">${v.name}</option>`).join("")}</select></div>
+          <div class="field"><label>Voyage *</label><select id="vsVoyage"><option value="">Select vessel first</option></select></div>
+        </div>
+        <div class="grid3" style="margin-bottom:12px;">
+          <div class="field"><label>Vessel Name</label><input id="vsVesselName" disabled></div>
+          <div class="field"><label>ETD (auto)</label><input id="vsEtd" disabled></div>
+          <div class="field"><label>ETA (auto)</label><input id="vsEta" disabled></div>
+        </div>
+        <div class="grid" style="margin-bottom:12px;">
+          <div class="field">
+            <label>Port(s) of Loading * <span class="sub" style="font-weight:400;">(each with its own ETA)</span></label>
+            <div id="vsPolRows"></div>
+            <button type="button" class="btn btn-sm" id="vsPolAdd">+ Add POL</button>
+          </div>
+          <div class="field">
+            <label>Port(s) of Discharge * <span class="sub" style="font-weight:400;">(each with its own ETA)</span></label>
+            <div id="vsPodRows"></div>
+            <button type="button" class="btn btn-sm" id="vsPodAdd">+ Add POD</button>
+          </div>
+        </div>
+        <div class="field" style="margin-bottom:12px;"><label>Subject *</label><input id="vsSubject" placeholder="e.g. Vessel Schedule Update — WAN HAI 316 / W219"></div>
+        <div class="field" style="margin-bottom:12px;"><label>Message *</label><textarea id="vsMessage" rows="3" placeholder="Short note for clients, e.g. Please find below the latest schedule for this sailing."></textarea></div>
+
+        <div class="field" style="margin-bottom:12px;"><label>To * <span class="sub" style="font-weight:400;">(comma, semicolon or one-per-line — can be 500+)</span></label><textarea id="vsTo" rows="3" placeholder="client1@example.com, client2@example.com, ..."></textarea></div>
+        <div class="grid" style="margin-bottom:18px;">
+          <div class="field"><label>CC</label><input id="vsCc" placeholder="cc1@example.com, cc2@example.com"></div>
+          <div class="field"><label>BCC</label><input id="vsBcc" placeholder="bcc1@example.com, bcc2@example.com"></div>
+        </div>
+
+        <h3 style="font-size:14px;">Schedule (optional)</h3>
+        <p class="sub">Leave blank to only use "Send Now" later. Fill this in and press Start to have it send automatically — the server must stay running for scheduled sends to fire.</p>
+        <div class="grid3" style="margin-bottom:12px;">
+          <div class="field"><label>Start Date</label><input type="date" id="vsStartDate"></div>
+          <div class="field"><label>Start Time</label><input type="time" id="vsStartTime" value="09:00"></div>
+          <div class="field"><label>Times per day</label><input type="number" id="vsTimesPerDay" min="1" max="12" value="1"></div>
+        </div>
+        <div class="field" style="margin-bottom:18px;"><label>Send times <span class="sub" style="font-weight:400;">(auto-filled from above, editable, 24h HH:MM comma-separated)</span></label><input id="vsSendTimes" placeholder="09:00"></div>
+
+        <div class="btn-row" style="margin-top:0;"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn btn-violet" id="vsSaveBtn">Create Schedule Email</button></div>
+      </div>
+    </div>`;
+
+  const regenTimes = () => { document.getElementById("vsSendTimes").value = autoTimes(document.getElementById("vsStartTime").value, document.getElementById("vsTimesPerDay").value).join(", "); };
+  document.getElementById("vsStartTime").onchange = regenTimes;
+  document.getElementById("vsTimesPerDay").oninput = regenTimes;
+  regenTimes();
+
+  function addPortRow(containerId, portOpts) {
+    const container = document.getElementById(containerId);
+    const row = document.createElement("div");
+    row.className = "port-row";
+    row.innerHTML = `<select class="port-select">${portOpts}</select><input type="date" class="port-eta" placeholder="ETA"><button type="button" class="port-row-remove" title="Remove">✕</button>`;
+    row.querySelector(".port-row-remove").onclick = () => { if (container.children.length > 1) row.remove(); };
+    container.appendChild(row);
+  }
+  function readPortRows(containerId) {
+    return Array.from(document.getElementById(containerId).children).map(row => ({
+      port: row.querySelector(".port-select").value,
+      eta: row.querySelector(".port-eta").value
+    })).filter(r => r.port);
+  }
+  document.getElementById("vsPolAdd").onclick = () => addPortRow("vsPolRows", portOpts);
+  document.getElementById("vsPodAdd").onclick = () => addPortRow("vsPodRows", portOpts);
+  addPortRow("vsPolRows", portOpts);
+  addPortRow("vsPodRows", portOpts);
+
+  document.getElementById("vsVessel").onchange = (e) => {
+    const v = openVoyages.find(v => String(v.id) === e.target.value);
+    const voySel = document.getElementById("vsVoyage");
+    document.getElementById("vsVesselName").value = v ? v.name : "";
+    if (!v) { voySel.innerHTML = `<option value="">Select vessel first</option>`; return; }
+    voySel.innerHTML = `<option value="">Select voyage...</option>` + v.voyages.map(voy => `<option value="${voy.id}">${voy.no} (ETD ${voy.etd || "—"} · ETA ${voy.eta || "—"})</option>`).join("");
+  };
+  document.getElementById("vsVoyage").onchange = (e) => {
+    const vesselId = document.getElementById("vsVessel").value;
+    const v = openVoyages.find(v => String(v.id) === vesselId);
+    const voy = v ? v.voyages.find(voy => String(voy.id) === e.target.value) : null;
+    document.getElementById("vsEtd").value = voy ? (voy.etd || "") : "";
+    document.getElementById("vsEta").value = voy ? (voy.eta || "") : "";
+  };
+
+  document.getElementById("vsSaveBtn").onclick = async () => {
+    const body = {
+      vessel_id: document.getElementById("vsVessel").value,
+      voyage_id: document.getElementById("vsVoyage").value,
+      pol_list: readPortRows("vsPolRows"),
+      pod_list: readPortRows("vsPodRows"),
+      subject: document.getElementById("vsSubject").value.trim(),
+      message: document.getElementById("vsMessage").value.trim(),
+      to_list: document.getElementById("vsTo").value.trim(),
+      cc_list: document.getElementById("vsCc").value.trim(),
+      bcc_list: document.getElementById("vsBcc").value.trim(),
+      schedule_start_date: document.getElementById("vsStartDate").value || null,
+      send_times: document.getElementById("vsSendTimes").value.split(",").map(s => s.trim()).filter(Boolean),
+    };
+    if (!body.vessel_id || !body.voyage_id) return toast("Select vessel and voyage", "error");
+    if (!body.pol_list.length) return toast("Add at least one Port of Loading", "error");
+    if (!body.pod_list.length) return toast("Add at least one Port of Discharge", "error");
+    if (!body.subject || !body.message) return toast("Subject and message are required", "error");
+    if (!body.to_list) return toast("Add at least one email in To", "error");
+    try {
+      await api("POST", "/api/vessel-campaigns", body);
+      toast("Vessel schedule email created", "success");
+      closeModal();
+      loadCampaigns();
+    } catch (e) { toast(e.message, "error"); }
+  };
+}
+document.getElementById("newScheduleBtn").onclick = openVesselScheduleForm;
+
+(async function init() {
+  const me = await renderTopNav("admin/vessels.html");
+  allowDelete = canDelete(me);
+  load();
+  loadCampaigns();
+})();
+</script>
+</body>
+</html>

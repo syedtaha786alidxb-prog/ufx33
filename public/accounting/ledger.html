@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Ledger — Harbor Desk</title><link rel="stylesheet" href="/css/style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+</head>
+<body>
+<div class="topnav" id="topnav"></div>
+<div class="wrap">
+  <div class="panel">
+    <div style="display:flex;justify-content:space-between;flex-wrap:wrap;align-items:flex-end;gap:10px;">
+      <div><h2>Account Ledger</h2><p class="sub">Running balance for a single account, with an opening balance carried in from before the "From" date.</p></div>
+      <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;">
+        <div class="field"><label>Account</label><select id="acctSelect" style="min-width:260px;"></select></div>
+        <div class="field"><label>From</label><input type="date" id="fromDate"></div>
+        <div class="field"><label>To</label><input type="date" id="toDate"></div>
+        <button class="btn btn-sm" id="filterBtn">Filter</button>
+        <button class="btn btn-sm" id="exportBtn">⬇ Export to Excel</button>
+        <button class="btn btn-sm" id="printBtn" onclick="window.print()">🖨 Print</button>
+      </div>
+    </div>
+    <table><thead><tr><th>Voucher</th><th>Date</th><th>Narration</th><th class="num">Debit</th><th class="num">Credit</th><th class="num">Balance</th></tr></thead>
+      <tbody id="rows"></tbody></table>
+  </div>
+</div>
+<script src="/js/api.js"></script>
+<script>
+renderTopNav("accounting/ledger.html");
+let allRows = [];
+let filteredRows = [];
+let openingBalance = 0;
+
+async function loadAccounts() {
+  const accounts = await api("GET", "/api/accounts");
+  const params = new URLSearchParams(location.search);
+  const preset = params.get("code");
+  document.getElementById("acctSelect").innerHTML = accounts.map(a=>`<option value="${a.code}" ${a.code===preset?"selected":""}>${a.code} — ${a.name}</option>`).join("");
+  await loadLedger(document.getElementById("acctSelect").value || accounts[0].code);
+}
+async function loadLedger(code) {
+  allRows = await api("GET", `/api/ledger/${code}`);
+  applyFilter();
+}
+function applyFilter() {
+  const from = document.getElementById("fromDate").value;
+  const to = document.getElementById("toDate").value;
+  openingBalance = allRows.filter(r => !from || r.date < from).reduce((s,r)=>s+r.debit-r.credit, 0);
+  filteredRows = allRows.filter(r => (!from || r.date >= from) && (!to || r.date <= to));
+  let running = openingBalance;
+  const withRunning = filteredRows.map(r => { running += r.debit - r.credit; return { ...r, runningInPeriod: running }; });
+  const openingRow = from ? `<tr style="background:#F7F8F9;font-weight:600;"><td colspan="5">Opening Balance (before ${from})</td><td class="num mono">${fmt(openingBalance)}</td></tr>` : "";
+  document.getElementById("rows").innerHTML = openingRow + (withRunning.map(r => `
+    <tr><td class="mono">${r.no}</td><td>${r.date}</td><td>${esc(r.narration)}</td>
+      <td class="num mono">${r.debit?fmt(r.debit):''}</td><td class="num mono">${r.credit?fmt(r.credit):''}</td><td class="num mono">${fmt(r.runningInPeriod)}</td></tr>`).join("")
+    || `<tr><td colspan="6"><div class="empty">No activity in this period.</div></td></tr>`);
+}
+document.getElementById("acctSelect").onchange = (e) => loadLedger(e.target.value);
+document.getElementById("filterBtn").onclick = applyFilter;
+document.getElementById("exportBtn").onclick = () => {
+  const acctLabel = document.getElementById("acctSelect").selectedOptions[0]?.textContent || "Account";
+  const data = [];
+  if (document.getElementById("fromDate").value) data.push({ Voucher: "", Date: "", Narration: `Opening Balance (before ${document.getElementById("fromDate").value})`, Debit: "", Credit: "", Balance: openingBalance });
+  let running = openingBalance;
+  filteredRows.forEach(r => { running += r.debit - r.credit; data.push({ Voucher: r.no, Date: r.date, Narration: r.narration, Debit: r.debit||"", Credit: r.credit||"", Balance: running }); });
+  const ws = XLSX.utils.json_to_sheet(data);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Ledger");
+  XLSX.writeFile(wb, `ledger-${acctLabel.split(" ")[0]}.xlsx`);
+};
+loadAccounts();
+</script>
+</body>
+</html>

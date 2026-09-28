@@ -1,0 +1,966 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><title>Booking Info — Harbor Desk</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<div class="topnav" id="topnav"></div>
+<div class="wrap">
+  <div class="panel" id="listView">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;">
+      <div><h2>Booking Info</h2><p class="sub">Every booking created so far — open one to edit it, or start a new one.</p></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn btn-sm btn-primary" id="newJobBtn">+ New Booking</button>
+        <a href="/job/joblist.html" class="btn btn-sm btn-teal" style="text-decoration:none;display:inline-block;">📋 Job List</a>
+      </div>
+    </div>
+    <div id="jobSearchBox"></div>
+    <table style="margin-top:10px;"><thead><tr><th>Job #</th><th>Date</th><th>Client</th><th>Booking</th><th></th></tr></thead><tbody id="recentBookingsRows"></tbody></table>
+  </div>
+
+  <div class="panel" id="formView" style="display:none;">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;">
+      <div><h2>Booking Info</h2><p class="sub">Client, routing and vessel details for this export job.</p></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <span class="badge badge-unsettled" id="bookingBadge">Draft</span>
+        <button class="btn btn-sm" id="backToListBtn">← Back to List</button>
+        <button class="btn btn-sm" id="saveBtn">Save</button>
+        <a href="/job/bl.html" class="btn btn-sm btn-orange" id="continueBtn" style="text-decoration:none;display:inline-block;">Save &amp; Continue to B/L →</a>
+        <button class="btn btn-sm btn-primary" id="approveBtn">Approve</button>
+        <button class="btn btn-sm" id="unapproveBtn" style="display:none;">Un-approve Booking</button>
+      </div>
+    </div>
+
+    <div class="grid3" style="margin-bottom:16px;">
+      <div class="field"><label>Job #</label><input id="jobNo" class="mono" disabled></div>
+      <div class="field"><label>Job Date</label><input type="date" id="jobDate"></div>
+      <div class="field"><label>Job Type</label><input value="Direct" disabled></div>
+      <div class="field"><label>Cost Center</label>
+        <select id="costCenter"><option>HEAD OFFICE</option><option>DUBAI BRANCH</option><option>JEBEL ALI</option></select>
+      </div>
+      <div class="field"><label>Freight Type</label><select id="freightType"><option>Prepaid</option><option>Collect</option></select></div>
+      <div class="field"><label>Sales Rep *</label><input id="salesRep" placeholder="e.g. YASEEN-07"></div>
+      <div class="field"><label>Direction</label><select id="direction" onchange="onDirectionChange(this.value)"></select></div>
+    </div>
+
+    <div class="grid">
+      <div class="field"><label>Client * <span class="sub" style="font-weight:400;">(tagged as Client)</span></label>
+        <div style="display:flex;gap:6px;"><input id="clientCode" class="mono" placeholder="Code e.g. P-0001" style="max-width:120px;" onchange="lookupPartyCode('clientCode','client')"><input id="client" list="clientList" style="flex:1;"></div>
+      </div>
+      <div class="field"><label>Shipper * <span class="sub" style="font-weight:400;">(tagged as Shipper)</span></label>
+        <div style="display:flex;gap:6px;"><input id="shipperCode" class="mono" placeholder="Code e.g. P-0001" style="max-width:120px;" onchange="lookupPartyCode('shipperCode','shipper')"><input id="shipper" list="shipperList" style="flex:1;"></div>
+      </div>
+      <div class="field"><label>Consignee * <span class="sub" style="font-weight:400;">(tagged as Consignee)</span></label>
+        <div style="display:flex;gap:6px;"><input id="consigneeCode" class="mono" placeholder="Code e.g. P-0001" style="max-width:120px;" onchange="lookupPartyCode('consigneeCode','consignee')"><input id="consignee" list="consigneeList" style="flex:1;"></div>
+      </div>
+      <div class="field"><label>Commodity *</label>
+        <div style="display:flex;gap:6px;"><select id="commodity" style="flex:1;"></select><button class="btn btn-sm" id="newCommodityBtn">+ New</button></div>
+      </div>
+      <div class="field"><label>Port of Loading *</label>
+        <div style="display:flex;gap:6px;"><input id="polCode" class="mono" placeholder="e.g. AEJEA" style="max-width:120px;" onchange="lookupPortCode('polCode','pol')"><select id="pol" style="flex:1;"></select></div>
+      </div>
+      <div class="field"><label>Port of Discharge *</label>
+        <div style="display:flex;gap:6px;"><input id="podCode" class="mono" placeholder="e.g. SAJED" style="max-width:120px;" onchange="lookupPortCode('podCode','pod')"><select id="pod" style="flex:1;"></select></div>
+      </div>
+      <div class="field"><label>Final Destination <span class="sub" style="font-weight:400;">(blank = same as POD)</span></label><select id="finalDest"><option value="">— Same as POD —</option></select></div>
+      <div></div>
+      <div class="field"><label>Vessel *</label>
+        <div style="display:flex;gap:6px;"><input id="vesselCode" class="mono" placeholder="Code e.g. V-0001" style="max-width:110px;" onchange="lookupVesselCode()"><select id="vesselSelect" style="flex:1;"></select><button class="btn btn-sm" id="newVesselBtn">+ New</button></div>
+      </div>
+      <div class="field"><label>Voyage *</label>
+        <div style="display:flex;gap:6px;"><select id="voyageSelect" style="flex:1;"></select><button class="btn btn-sm" id="newVoyageBtn">+ New</button></div>
+      </div>
+      <div class="field"><label>ETD</label><input type="date" id="etd"></div>
+      <div class="field"><label>ETA</label><input type="date" id="eta"></div>
+      <div class="field"><label>Cut-Off</label><input id="cutOff" disabled placeholder="Pulled from voyage"></div>
+    </div>
+    <datalist id="clientList"></datalist>
+    <datalist id="shipperList"></datalist>
+    <datalist id="consigneeList"></datalist>
+
+    <div class="hint" style="font-size:11.5px;color:var(--text-mute);margin-top:8px;">
+      Only parties tagged with the matching role show up here — manage roles under Admin → Customers &amp; Vendors.
+      Vessels/voyages managed under Admin → Vessels &amp; Voyages.
+    </div>
+
+  </div>
+
+  <div class="panel" id="inlinePanel" style="display:none;">
+    <h2>Equipment</h2>
+    <p class="sub">Container sizes/types &amp; quantities for this job. Each size/type can only be added once.</p>
+    <table><thead><tr><th></th><th>Size/Type</th><th class="num">Qty</th><th>DG</th><th class="num">TEU</th></tr></thead><tbody id="inlEquipRows"></tbody></table>
+    <div class="btn-row" style="background:#F7F8F9;padding:12px 16px;border-radius:8px;border:1px solid var(--line);">
+      <div>Total Containers: <b class="mono" id="inlTotalCnt">0</b></div>
+      <div>Total TEU: <b class="mono" id="inlTotalTeu">0</b></div>
+    </div>
+    <div class="btn-row" style="margin-top:0;"><button class="btn btn-sm" id="inlAddEquipBtn">+ Add Equipment Row</button></div>
+
+    <h2 style="margin-top:26px;">Charges</h2>
+    <p class="sub">Revenue charges — quantities pull from Equipment above.</p>
+    <div class="btn-row" style="margin-top:0;margin-bottom:10px;">
+      <button class="btn btn-sm btn-primary" id="inlApproveChargesBtn">Approve Charges</button>
+      <button class="btn btn-sm" id="inlUnapproveChargesBtn" style="display:none;">Un-approve Charges</button>
+      <span id="inlChargesStatus"></span>
+    </div>
+    <table><thead><tr><th></th><th>Charge</th><th>Size/Type</th><th class="num">Qty</th><th class="num">Rate</th><th>Ccy</th><th class="num">Ex. Rate</th><th class="num">Amount</th></tr></thead><tbody id="inlChargeRows"></tbody></table>
+    <div class="btn-row" style="margin-top:0;">
+      <button class="btn btn-sm" id="inlAddChargeBtn">+ Add Charge</button>
+      <button class="btn btn-sm btn-teal" id="inlApplyTariffChargesBtn" onclick="openApplyTariffChargesModal()">📋 Apply Tariff</button>
+      <button class="btn btn-sm" id="inlRemoveTariffChargesBtn" style="display:none;" onclick="removeTariffCharges()">✕ Remove Tariff</button>
+    </div>
+    <div class="btn-row" style="background:#F7F8F9;padding:10px 14px;border-radius:8px;border:1px solid var(--line);flex-wrap:wrap;gap:14px;">
+      <div>Total Receivable (AED): <b class="mono" id="inlChargeTotal">0.00</b></div>
+      <div id="inlChargeByCurrency" class="sub" style="display:flex;gap:14px;flex-wrap:wrap;"></div>
+    </div>
+
+    <h2 style="margin-top:26px;">Payable / Cost</h2>
+    <p class="sub">Record cost lines here first (like Charges) — nothing posts to accounting yet. Use "Generate Bill" per vendor to turn their draft lines into an actual vendor bill.</p>
+    <div class="grid3">
+      <div class="field"><label>Vendor *</label>
+        <div style="display:flex;gap:6px;"><input id="inlPcVendorCode" class="mono" placeholder="Code" style="max-width:90px;" onchange="lookupVendorCode()"><input id="inlPcVendor" style="flex:1;" oninput="onInlPcVendorInput()"></div>
+      </div>
+      <div class="field"><label>Amount Mode</label>
+        <select id="inlPcMode" onchange="onInlPcModeChange()"><option value="flat">Flat Amount</option><option value="qty">Qty × Rate</option></select>
+      </div>
+      <div class="field"><label>Bill Type *</label>
+        <select id="inlPcBillType" onchange="onInlPcBillTypeChange()"><option value="Regular">Regular</option><option value="Advance">Advance Payment</option></select>
+      </div>
+      <div class="field" id="inlPcFlatField"><label>Amount *</label><input type="number" id="inlPcAmount" min="0" step="0.01"></div>
+      <div class="field" id="inlPcSizeField" style="display:none;"><label>Size/Type</label><select id="inlPcSize" onchange="onInlPcSizeChange()"></select></div>
+      <div class="field" id="inlPcQtyField" style="display:none;"><label>Qty <span class="sub" style="font-weight:400;">(auto from Equipment, editable)</span></label><input type="number" id="inlPcQty" min="0"></div>
+      <div class="field" id="inlPcRateField" style="display:none;"><label>Rate</label><input type="number" id="inlPcRate" min="0" step="0.01" oninput="onInlPcQtyRateInput()"></div>
+      <div class="field"><label>Currency *</label>
+        <select id="inlPcCurrency" onchange="onInlPcCurrencyChange()"><option value="AED">AED</option><option value="USD">USD</option><option value="EUR">EUR</option><option value="GBP">GBP</option><option value="INR">INR</option></select>
+      </div>
+      <div class="field" id="inlPcExRateField" style="display:none;"><label>Exchange Rate → AED *</label><input type="number" id="inlPcExRate" min="0" step="0.0001"></div>
+      <div class="field" id="inlPcExpenseAccountField"><label>Cost Account</label><select id="inlPcExpenseAccount"></select></div>
+      <div class="field" id="inlPcDescField"><label>Description *</label><input id="inlPcDesc" placeholder="e.g. Trucking charges"></div>
+      <div class="field"><label>Against Charge <span class="sub" style="font-weight:400;">(optional — which revenue charge this bill is against)</span></label>
+        <select id="inlPcChargeRef"><option value="">— Not linked to a charge —</option></select></div>
+    </div>
+    <div id="inlPcVendorInfo" style="display:none;background:#F7F8F9;border:1px solid var(--line);border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:13px;"></div>
+    <div class="btn-row" style="margin-top:0;">
+      <button class="btn btn-sm btn-violet" id="inlPcAddBtn">+ Add Cost Line</button>
+      <button class="btn btn-sm btn-teal" id="inlApplyTariffCostsBtn" onclick="openApplyTariffCostsModal()">📋 Apply Tariff</button>
+      <button class="btn btn-sm" id="inlRemoveTariffCostsBtn" style="display:none;" onclick="removeTariffCosts()">✕ Remove Tariff</button>
+    </div>
+
+    <h3 style="margin-top:20px;font-size:14px;">Draft Cost Lines <span class="sub" style="font-weight:400;">(not yet billed)</span></h3>
+    <table><thead><tr><th></th><th>Vendor</th><th>Description</th><th class="num">Amount</th></tr></thead><tbody id="inlCostDraftRows"></tbody></table>
+    <div id="inlGenerateBillBox" style="margin:10px 0 20px;"></div>
+
+    <h3 style="font-size:14px;">Generated Bills</h3>
+    <table><thead><tr><th>Bill #</th><th>Vendor</th><th>Description</th><th class="num">Amount</th><th class="num">Outstanding</th><th>Status</th><th></th></tr></thead><tbody id="inlPcRows"></tbody></table>
+  </div>
+</div>
+<div id="modalRoot"></div>
+<script src="/js/api.js"></script>
+<script>
+let vessels = [];
+let job = null;
+
+async function loadVessels() {
+  vessels = await api("GET", "/api/vessels");
+  const vSel = document.getElementById("vesselSelect");
+  vSel.innerHTML = `<option value="">Select vessel...</option>` + vessels.map(v => `<option value="${v.id}">${v.name}</option>`).join("");
+}
+function populateVoyages(vesselId, selectedVoyageId) {
+  const vSel = document.getElementById("voyageSelect");
+  const vessel = vessels.find(v => v.id == vesselId);
+  vSel.innerHTML = `<option value="">Select voyage...</option>` + (vessel ? vessel.voyages.map(v =>
+    `<option value="${v.id}" ${v.closed?"disabled":""} ${String(v.id)===String(selectedVoyageId)?"selected":""}>${v.no}${v.closed?" (Closed — financially locked)":""}</option>`
+  ).join("") : "");
+}
+function autoFillVoyageDates(voyageId) {
+  const vessel = vessels.find(v => v.id == document.getElementById("vesselSelect").value);
+  const voyage = vessel ? vessel.voyages.find(v => v.id == voyageId) : null;
+  if (voyage) {
+    if (voyage.etd) document.getElementById("etd").value = voyage.etd;
+    if (voyage.eta) document.getElementById("eta").value = voyage.eta;
+    document.getElementById("cutOff").value = voyage.cut_off || "";
+  } else {
+    document.getElementById("cutOff").value = "";
+  }
+}
+async function loadRecentBookings() {
+  const jobs = await api("GET", "/api/jobs");
+  document.getElementById("recentBookingsRows").innerHTML = jobs.slice(0, 30).map(j => `
+    <tr><td class="mono">${esc(j.job_no)}</td><td>${j.job_date||"—"}</td><td>${esc(j.client)||"—"}</td>
+      <td><span class="badge ${j.booking_approved?'badge-settled':'badge-unsettled'}">${j.booking_approved?'Approved':'Draft'}</span></td>
+      <td><button class="btn btn-sm btn-orange" onclick="openBookingById(${j.id})">Open</button></td></tr>`).join("")
+    || `<tr><td colspan="5"><div class="empty">No bookings created yet — click "+ New Booking" to start one.</div></td></tr>`;
+}
+function showListView() {
+  document.getElementById("listView").style.display = "block";
+  document.getElementById("formView").style.display = "none";
+  document.getElementById("inlinePanel").style.display = "none";
+  loadRecentBookings();
+}
+function showFormView() {
+  document.getElementById("listView").style.display = "none";
+  document.getElementById("formView").style.display = "block";
+}
+window.openBookingById = async (id) => {
+  try {
+    job = await api("GET", `/api/jobs/${id}`);
+    setCurrentJobId(job.id);
+    showFormView();
+    fillForm(job);
+    loadInlineSections();
+  } catch (e) { toast(e.message, "error"); }
+};
+function codeForVessel(vesselId) {
+  const v = vessels.find(v => v.id == vesselId);
+  return v ? (v.code || "") : "";
+}
+document.getElementById("vesselSelect").onchange = (e) => {
+  populateVoyages(e.target.value);
+  document.getElementById("cutOff").value = "";
+  document.getElementById("vesselCode").value = codeForVessel(e.target.value);
+};
+document.getElementById("voyageSelect").onchange = (e) => autoFillVoyageDates(e.target.value);
+window.lookupVesselCode = () => {
+  const code = document.getElementById("vesselCode").value.trim();
+  if (!code) return;
+  const v = vessels.find(v => (v.code||"").toLowerCase() === code.toLowerCase());
+  if (!v) { toast(`No vessel found with code "${code}"`, "error"); return; }
+  document.getElementById("vesselSelect").value = v.id;
+  populateVoyages(v.id);
+  toast(`Vessel set to ${v.name} (${v.code})`, "success");
+};
+
+document.getElementById("newVesselBtn").onclick = async () => {
+  const name = prompt("Vessel name:");
+  if (!name) return;
+  try { await api("POST", "/api/vessels", { name }); await loadVessels(); toast("Vessel added", "success"); }
+  catch(e){ toast(e.message, "error"); }
+};
+document.getElementById("newVoyageBtn").onclick = async () => {
+  const vesselId = document.getElementById("vesselSelect").value;
+  if (!vesselId) return toast("Select a vessel first", "error");
+  const no = prompt("Voyage number:");
+  if (!no) return;
+  const etd = prompt("ETD (YYYY-MM-DD):", new Date().toISOString().slice(0,10));
+  const eta = prompt("ETA (YYYY-MM-DD):", new Date().toISOString().slice(0,10));
+  const cut_off = prompt("Cut-off date (YYYY-MM-DD), optional:", "");
+  try {
+    await api("POST", `/api/vessels/${vesselId}/voyages`, { no, etd, eta, cut_off });
+    await loadVessels();
+    document.getElementById("vesselSelect").value = vesselId;
+    populateVoyages(vesselId);
+    toast("Voyage added", "success");
+  } catch(e){ toast(e.message, "error"); }
+};
+
+let parties = [];
+function roleLabel(p) {
+  const roles = [];
+  if (p.is_client) roles.push("Client");
+  if (p.is_shipper) roles.push("Shipper");
+  if (p.is_consignee) roles.push("Consignee");
+  if (p.is_vendor) roles.push("Vendor");
+  return roles.join(", ") || "No role tagged yet";
+}
+async function loadParties() {
+  parties = await api("GET", "/api/parties");
+  // Every party ever added shows up here, regardless of which role checkbox was ticked —
+  // picking one for a slot tags that role automatically when the booking is saved.
+  const asItems = () => parties.map(p => ({ label: p.name, sub: `${p.code || ""} — ${roleLabel(p)}` }));
+  // A party tagged ONLY as Vendor can't be a Client — filtered out here, and enforced again on save.
+  const clientItems = () => parties.filter(p => !(p.is_vendor && !p.is_client)).map(p => ({ label: p.name, sub: `${p.code || ""} — ${roleLabel(p)}` }));
+  const onPickFor = (codeFieldId) => (item) => {
+    const p = parties.find(pp => pp.name === item.label);
+    document.getElementById(codeFieldId).value = p ? (p.code || "") : "";
+  };
+  attachAutocomplete(document.getElementById("client"), clientItems, onPickFor("clientCode"));
+  attachAutocomplete(document.getElementById("shipper"), asItems, onPickFor("shipperCode"));
+  attachAutocomplete(document.getElementById("consignee"), asItems, onPickFor("consigneeCode"));
+}
+window.lookupPartyCode = (codeFieldId, nameFieldId) => {
+  const code = document.getElementById(codeFieldId).value.trim();
+  if (!code) return;
+  const p = parties.find(p => (p.code||"").toLowerCase() === code.toLowerCase());
+  if (!p) { toast(`No party found with code "${code}"`, "error"); return; }
+  document.getElementById(nameFieldId).value = p.name;
+  toast(`${nameFieldId[0].toUpperCase()+nameFieldId.slice(1)} set to ${p.name}`, "success");
+};
+
+let ports = [];
+async function loadPorts() {
+  ports = await api("GET", "/api/ports");
+  const opts = `<option value="">Select port...</option>` + ports.map(p => `<option value="${p.name}">${p.name} (${p.locode||""}) — ${p.country||""}</option>`).join("");
+  document.getElementById("pol").innerHTML = opts;
+  document.getElementById("pod").innerHTML = opts;
+  document.getElementById("finalDest").innerHTML = `<option value="">— Same as POD —</option>` + ports.map(p => `<option value="${p.name}">${p.name} (${p.locode||""}) — ${p.country||""}</option>`).join("");
+  document.getElementById("pol").onchange = () => { document.getElementById("polCode").value = codeForPort(document.getElementById("pol").value); };
+  document.getElementById("pod").onchange = () => { document.getElementById("podCode").value = codeForPort(document.getElementById("pod").value); };
+}
+window.lookupPortCode = (codeFieldId, selectFieldId) => {
+  const code = document.getElementById(codeFieldId).value.trim();
+  if (!code) return;
+  const p = ports.find(p => (p.locode||"").toLowerCase() === code.toLowerCase());
+  if (!p) { toast(`No port found with code "${code}"`, "error"); return; }
+  document.getElementById(selectFieldId).value = p.name;
+  toast(`Port set to ${p.name} (${p.locode})`, "success");
+};
+
+let commodities = [];
+async function loadCommodities(selected) {
+  commodities = await api("GET", "/api/commodities");
+  const sel = document.getElementById("commodity");
+  sel.innerHTML = `<option value="">Select commodity...</option>` + commodities.map(c => `<option value="${c.name}" ${c.name===selected?"selected":""}>${c.name}</option>`).join("");
+  if (selected && !commodities.find(c=>c.name===selected)) {
+    sel.innerHTML += `<option value="${selected}" selected>${selected} (not in master list)</option>`;
+  }
+}
+document.getElementById("newCommodityBtn").onclick = async () => {
+  const name = prompt("New commodity name:");
+  if (!name) return;
+  try { await api("POST", "/api/commodities", { name }); await loadCommodities(name); toast("Commodity added","success"); }
+  catch(e){ toast(e.message, "error"); }
+};
+
+function codeForParty(name) {
+  const p = parties.find(pp => pp.name === name);
+  return p ? (p.code || "") : "";
+}
+function codeForPort(name) {
+  const p = ports.find(pp => pp.name === name);
+  return p ? (p.locode || "") : "";
+}
+function fillForm(j) {
+  document.getElementById("jobNo").value = j.job_no;
+  document.getElementById("jobDate").value = j.job_date || "";
+  document.getElementById("costCenter").value = j.cost_center || "HEAD OFFICE";
+  document.getElementById("freightType").value = j.freight_type || "Prepaid";
+  document.getElementById("salesRep").value = j.sales_rep || "";
+  document.getElementById("direction").value = j.direction || "Export";
+  document.getElementById("client").value = j.client || "";
+  document.getElementById("clientCode").value = codeForParty(j.client);
+  document.getElementById("shipper").value = j.shipper || "";
+  document.getElementById("shipperCode").value = codeForParty(j.shipper);
+  document.getElementById("consignee").value = j.consignee || "";
+  document.getElementById("consigneeCode").value = codeForParty(j.consignee);
+  loadCommodities(j.commodity || "GENERAL CARGO");
+  document.getElementById("pol").value = j.pol || "";
+  document.getElementById("polCode").value = codeForPort(j.pol);
+  document.getElementById("pod").value = j.pod || "";
+  document.getElementById("podCode").value = codeForPort(j.pod);
+  document.getElementById("finalDest").value = j.final_dest || "";
+  document.getElementById("etd").value = j.etd || "";
+  document.getElementById("eta").value = j.eta || "";
+  document.getElementById("vesselSelect").value = j.vessel_id || "";
+  document.getElementById("vesselCode").value = codeForVessel(j.vessel_id);
+  populateVoyages(j.vessel_id, j.voyage_id);
+  document.getElementById("voyageSelect").value = j.voyage_id || "";
+  document.getElementById("cutOff").value = j.cut_off || "";
+  document.getElementById("bookingBadge").textContent = j.booking_approved ? "Booking Approved" : "Booking Draft";
+  document.getElementById("bookingBadge").className = "badge " + (j.booking_approved ? "badge-settled" : "badge-unsettled");
+  // Once approved, the booking form is locked — fields stay read-only until Un-approve Booking is
+  // clicked, so it can't silently drift after Charges/Bills have started referencing it.
+  const lockFieldIds = ["jobDate","costCenter","freightType","salesRep","direction","clientCode","client",
+    "shipperCode","shipper","consigneeCode","consignee","commodity","newCommodityBtn","polCode","pol",
+    "podCode","pod","finalDest","vesselCode","vesselSelect","newVesselBtn","voyageSelect","newVoyageBtn","etd","eta"];
+  lockFieldIds.forEach(id => { const el = document.getElementById(id); if (el) el.disabled = !!j.booking_approved; });
+  document.getElementById("saveBtn").disabled = !!j.booking_approved;
+  document.getElementById("approveBtn").style.display = j.booking_approved ? "none" : "inline-block";
+  document.getElementById("unapproveBtn").style.display = j.booking_approved ? "inline-block" : "none";
+}
+
+window.onDirectionChange = async (newDirection) => {
+  if (!job || job.direction === newDirection) return;
+  try {
+    job = await api("POST", `/api/jobs/${job.id}/renumber`, { direction: newDirection });
+    document.getElementById("jobNo").value = job.job_no;
+    document.getElementById("hbl") && (document.getElementById("hbl").value = job.job_no);
+    toast(`Job renumbered to ${job.job_no}`, "success");
+  } catch (e) {
+    toast(e.message, "error");
+    document.getElementById("direction").value = job.direction;
+  }
+};
+
+function readForm() {
+  return {
+    job_date: document.getElementById("jobDate").value,
+    cost_center: document.getElementById("costCenter").value,
+    freight_type: document.getElementById("freightType").value,
+    sales_rep: document.getElementById("salesRep").value,
+    direction: document.getElementById("direction").value,
+    client: document.getElementById("client").value,
+    shipper: document.getElementById("shipper").value,
+    consignee: document.getElementById("consignee").value,
+    commodity: document.getElementById("commodity").value,
+    pol: document.getElementById("pol").value,
+    pod: document.getElementById("pod").value,
+    final_dest: document.getElementById("finalDest").value || document.getElementById("pod").value,
+    vessel_id: document.getElementById("vesselSelect").value || null,
+    voyage_id: document.getElementById("voyageSelect").value || null,
+    etd: document.getElementById("etd").value,
+    eta: document.getElementById("eta").value,
+  };
+}
+function validate(f) {
+  const req = { client: "Client", shipper: "Shipper", consignee: "Consignee", pol: "POL", pod: "POD", sales_rep: "Sales Rep", commodity: "Commodity" };
+  const missing = Object.entries(req).filter(([k]) => !f[k]).map(([, l]) => l);
+  if (!f.vessel_id) missing.push("Vessel");
+  if (!f.voyage_id) missing.push("Voyage");
+  return missing;
+}
+
+document.getElementById("newJobBtn").onclick = async () => {
+  const j = await api("POST", "/api/jobs", { direction: document.getElementById("direction").value || "Export" });
+  setCurrentJobId(j.id);
+  job = j;
+  showFormView();
+  fillForm(j);
+  loadInlineSections();
+  toast("Started a new booking", "success");
+};
+document.getElementById("backToListBtn").onclick = () => showListView();
+document.getElementById("saveBtn").onclick = async () => {
+  const f = readForm();
+  const missing = validate(f);
+  if (missing.length) return toast("Missing: " + missing.join(", "), "error");
+  try {
+    job = await api("PUT", `/api/jobs/${job.id}`, f);
+    fillForm(job);
+    toast("Booking info saved", "success");
+    loadInlineSections();
+    loadRecentBookings();
+  } catch(e){ toast(e.message, "error"); }
+};
+document.getElementById("approveBtn").onclick = async () => {
+  const f = readForm();
+  const missing = validate(f);
+  if (missing.length) return toast("Missing: " + missing.join(", "), "error");
+  try {
+    await api("PUT", `/api/jobs/${job.id}`, f);
+    job = await api("POST", `/api/jobs/${job.id}/approve-booking`);
+    fillForm(job);
+    toast("Booking approved", "success");
+  } catch(e){ toast(e.message, "error"); }
+};
+document.getElementById("unapproveBtn").onclick = async () => {
+  try {
+    job = await api("POST", `/api/jobs/${job.id}/unapprove-booking`);
+    fillForm(job);
+    toast("Booking un-approved — you can edit it again", "success");
+  } catch(e){ toast(e.message, "error"); }
+};
+document.getElementById("continueBtn").onclick = async (e) => {
+  e.preventDefault();
+  if (job.booking_approved) { window.location.href = "/job/bl.html"; return; } // already locked/saved — nothing to save again
+  const f = readForm();
+  const missing = validate(f);
+  if (missing.length) return toast("Missing: " + missing.join(", "), "error");
+  try {
+    job = await api("PUT", `/api/jobs/${job.id}`, f);
+    toast("Saved", "success");
+    window.location.href = "/job/bl.html";
+  } catch(e){ toast(e.message, "error"); }
+};
+
+/* ===================== Inline Equipment / Charges / Payable-Cost ===================== */
+const SIZE_TYPES = ["20SD","20RF","20OT","20GO","20TK","20FR","20BK","40SD","40HC","40RF","40FR","40OT"];
+let inlChargeCodes = [];
+let inlAllParties = [];
+let inlAllPayables = [];
+let inlPcAccounts = [];
+let inlPcBankAccounts = [];
+
+async function loadInlineSections() {
+  if (!job || !job.id) return;
+  document.getElementById("inlinePanel").style.display = "block";
+  await Promise.all([loadInlEquipment(), loadInlChargeCodes().then(loadInlCharges), loadInlPcSection()]);
+}
+
+async function loadInlEquipment() {
+  const rows = await api("GET", `/api/jobs/${job.id}/equipment`);
+  document.getElementById("inlEquipRows").innerHTML = rows.map(r => `
+    <tr data-id="${r.id}">
+      <td><button class="btn btn-sm" onclick="inlDelEquip(${r.id})">✕</button></td>
+      <td><select onchange="inlUpdateEquip(${r.id},'size',this.value)">${SIZE_TYPES.map(s=>`<option ${s===r.size?"selected":""}>${s}</option>`).join("")}</select></td>
+      <td><input type="number" min="0" class="num" value="${r.qty}" onchange="inlUpdateEquip(${r.id},'qty',this.value)"></td>
+      <td><select onchange="inlUpdateEquip(${r.id},'dg',this.value)"><option ${r.dg==='Non DG'?'selected':''}>Non DG</option><option ${r.dg==='DG'?'selected':''}>DG</option></select></td>
+      <td class="num mono">${r.size.startsWith("40") ? r.qty*2 : r.qty}</td>
+    </tr>`).join("") || `<tr><td colspan="5"><div class="empty">No equipment yet — add a row.</div></td></tr>`;
+  document.getElementById("inlTotalCnt").textContent = rows.reduce((s,r)=>s+r.qty,0);
+  document.getElementById("inlTotalTeu").textContent = rows.reduce((s,r)=>s+(r.size.startsWith("40")?2:1)*r.qty,0);
+}
+window.inlUpdateEquip = async (id, field, value) => {
+  const row = [...document.querySelectorAll(`#inlEquipRows tr[data-id="${id}"]`)][0];
+  const size = row.querySelector("select").value;
+  const qty = row.querySelector("input").value;
+  const dg = row.querySelectorAll("select")[1].value;
+  const payload = { size, qty: Number(qty), dg };
+  payload[field] = field === "qty" ? Number(value) : value;
+  try { await api("PUT", `/api/equipment/${id}`, payload); loadInlEquipment(); loadInlCharges(); }
+  catch(e){ toast(e.message, "error"); loadInlEquipment(); }
+};
+window.inlDelEquip = async (id) => { await api("DELETE", `/api/equipment/${id}`); loadInlEquipment(); loadInlCharges(); };
+document.getElementById("inlAddEquipBtn").onclick = async () => {
+  const existing = await api("GET", `/api/jobs/${job.id}/equipment`);
+  const usedSizes = new Set(existing.map(r => r.size));
+  const freeSize = SIZE_TYPES.find(s => !usedSizes.has(s));
+  if (!freeSize) return toast("Every size/type has already been added to this job", "error");
+  try { await api("POST", `/api/jobs/${job.id}/equipment`, { size: freeSize, qty: 0, dg: "Non DG" }); loadInlEquipment(); }
+  catch(e){ toast(e.message, "error"); }
+};
+
+async function loadInlChargeCodes() { if (!inlChargeCodes.length) inlChargeCodes = await api("GET", "/api/charge-codes"); }
+let currentUser = null;
+async function loadInlCharges() {
+  const [freshJob, equipment, rows] = await Promise.all([
+    api("GET", `/api/jobs/${job.id}`),
+    api("GET", `/api/jobs/${job.id}/equipment`),
+    api("GET", `/api/jobs/${job.id}/charges`),
+  ]);
+  job.booking_approved = freshJob.booking_approved;
+  job.booking_saved = freshJob.booking_saved;
+  job.charges_approved = freshJob.charges_approved;
+  const approved = !!freshJob.charges_approved;
+  const canApprove = !!(currentUser && (currentUser.can_approve || currentUser.role === "Admin"));
+  const addChargeBtn = document.getElementById("inlAddChargeBtn");
+  addChargeBtn.disabled = !freshJob.booking_saved || approved;
+  addChargeBtn.title = freshJob.booking_saved ? "" : "Save Booking Info first";
+  const applyTariffBtn = document.getElementById("inlApplyTariffChargesBtn");
+  applyTariffBtn.disabled = !freshJob.booking_saved || approved;
+  document.getElementById("inlRemoveTariffChargesBtn").style.display = (rows.some(r => r.tariff_charge_id) && !approved) ? "inline-block" : "none";
+  document.getElementById("inlApproveChargesBtn").disabled = approved || !canApprove;
+  document.getElementById("inlApproveChargesBtn").title = canApprove ? "" : "You don't have permission to approve Charges — ask an admin to grant it.";
+  const unapproveBtn = document.getElementById("inlUnapproveChargesBtn");
+  unapproveBtn.style.display = (approved && canApprove) ? "inline-block" : "none";
+  document.getElementById("inlChargesStatus").innerHTML = !freshJob.booking_saved
+    ? `<span class="badge badge-unsettled">⚠ Save Booking Info above first</span>`
+    : approved
+      ? `<span class="badge badge-settled">Charges Approved ✓</span>`
+      : `<span class="sub">Charges must be approved before generating the invoice or any vendor bill.</span>`;
+  const sizes = {};
+  equipment.forEach(e => { if (e.qty > 0) sizes[e.size] = (sizes[e.size]||0) + e.qty; });
+  const sizeKeys = Object.keys(sizes);
+  document.getElementById("inlChargeRows").innerHTML = rows.map(r => `
+    <tr data-id="${r.id}">
+      <td><button class="btn btn-sm" onclick="inlDelCharge(${r.id})" ${approved?"disabled":""}>✕</button></td>
+      <td><select class="fCode" onchange="inlUpdateCharge(${r.id},'code',this.value)" ${approved?"disabled":""}>${inlChargeCodes.map(cc=>`<option value="${cc.code}" ${cc.code===r.code?"selected":""}>${cc.code} — ${cc.name}</option>`).join("")}</select>${r.tariff_charge_id?` <span class="badge badge-settled" style="font-size:9.5px;">Tariff</span>`:''}</td>
+      <td><select class="fSize" onchange="inlUpdateCharge(${r.id},'size',this.value)" ${approved?"disabled":""}>${sizeKeys.map(s=>`<option ${s===r.size?"selected":""}>${s}</option>`).join("")}</select></td>
+      <td>
+        <input type="number" min="0" class="num fQty" style="width:64px;" value="${r.qty}" onchange="inlUpdateCharge(${r.id},'qty_override',this.value)" ${approved?"disabled":""}>
+        ${r.qty_override!==null && r.qty_override!==undefined ? `<a href="#" onclick="inlResetQty(${r.id});return false;" class="sub" style="font-size:10.5px;">↺ auto (${r.auto_qty})</a>` : ""}
+      </td>
+      <td><input type="number" min="0" step="0.01" class="num fRate" value="${r.rate}" onchange="inlUpdateCharge(${r.id},'rate',this.value)" ${approved?"disabled":""}></td>
+      <td><select class="fCcy" onchange="inlUpdateCharge(${r.id},'currency',this.value)" ${approved?"disabled":""}><option ${r.currency==="AED"?"selected":""}>AED</option><option ${r.currency==="USD"?"selected":""}>USD</option><option ${r.currency==="EUR"?"selected":""}>EUR</option><option ${r.currency==="GBP"?"selected":""}>GBP</option><option ${r.currency==="INR"?"selected":""}>INR</option></select></td>
+      <td>${r.currency==="AED" ? `<span class="sub mono">1</span>` : `<input type="number" min="0" step="0.0001" class="num fExRate" style="width:80px;" value="${r.exchange_rate||1}" onchange="inlUpdateCharge(${r.id},'exchange_rate',this.value)" ${approved?"disabled":""}>`}</td>
+      <td class="num mono">${fmt(r.amt)}${r.currency!=='AED'?`<div class="sub" style="font-size:10.5px;">= AED ${fmt(r.base_amt)}</div>`:''}</td>
+    </tr>`).join("") || `<tr><td colspan="8"><div class="empty">No charges yet.</div></td></tr>`;
+  document.getElementById("inlChargeTotal").textContent = fmt(rows.reduce((s,r)=>s+r.base_amt,0));
+  // Per-currency subtotal breakdown — when charges use more than one currency, show each
+  // currency's own total separately underneath (e.g. AED total, USD total, ...).
+  const byCcy = {};
+  rows.forEach(r => { byCcy[r.currency] = (byCcy[r.currency]||0) + r.amt; });
+  document.getElementById("inlChargeByCurrency").innerHTML = Object.entries(byCcy)
+    .map(([ccy, total]) => `<span>${esc(ccy)} Total: <b class="mono">${fmt(total)}</b></span>`).join("");
+}
+document.getElementById("inlApproveChargesBtn").onclick = async () => {
+  try { await api("POST", `/api/jobs/${job.id}/approve-charges`); toast("Charges approved", "success"); loadInlCharges(); }
+  catch(e){ toast(e.message, "error"); }
+};
+document.getElementById("inlUnapproveChargesBtn").onclick = async () => {
+  try { await api("POST", `/api/jobs/${job.id}/unapprove-charges`); toast("Charges un-approved", "success"); loadInlCharges(); }
+  catch(e){ toast(e.message, "error"); }
+};
+window.inlUpdateCharge = async (id, field, value) => {
+  const row = [...document.querySelectorAll(`#inlChargeRows tr[data-id="${id}"]`)][0];
+  const exRateInput = row.querySelector(".fExRate");
+  const payload = {
+    code: row.querySelector(".fCode").value,
+    size: row.querySelector(".fSize").value,
+    rate: Number(row.querySelector(".fRate").value),
+    currency: row.querySelector(".fCcy").value,
+    exchange_rate: exRateInput ? Number(exRateInput.value) : 1,
+    qty_override: row.querySelector(".fQty").value === "" ? null : Number(row.querySelector(".fQty").value),
+  };
+  if (field === "size") payload.qty_override = null; // changing size invalidates any manual override
+  else payload[field] = (field === "rate" || field === "exchange_rate" || field === "qty_override") ? (value === "" ? null : Number(value)) : value;
+  // When the currency itself changed, pre-fill the exchange rate from the Currency master table
+  // (still just a suggestion — the row's own rate is what actually gets saved and locked).
+  if (field === "currency" && value !== "AED") {
+    const masterRate = masterRateFor(value);
+    if (masterRate) payload.exchange_rate = masterRate;
+  }
+  try { await api("PUT", `/api/charges/${id}`, payload); loadInlCharges(); }
+  catch(e){ toast(e.message, "error"); loadInlCharges(); }
+};
+window.inlResetQty = async (id) => {
+  try { await api("PUT", `/api/charges/${id}`, { qty_override: null }); loadInlCharges(); }
+  catch(e){ toast(e.message, "error"); }
+};
+window.inlDelCharge = async (id) => { await api("DELETE", `/api/charges/${id}`); loadInlCharges(); };
+document.getElementById("inlAddChargeBtn").onclick = async () => {
+  if (!job.booking_saved) return toast("Save Booking Info first — charges can't be added until the booking has been saved.", "error");
+  const equipment = await api("GET", `/api/jobs/${job.id}/equipment`);
+  const sizeKeys = [...new Set(equipment.filter(e=>e.qty>0).map(e=>e.size))];
+  if (!sizeKeys.length) return toast("Add equipment quantities first", "error");
+  if (!inlChargeCodes.length) return toast("No charge codes set up yet — add one under Admin → Charge Codes", "error");
+  try {
+    await api("POST", `/api/jobs/${job.id}/charges`, { code: inlChargeCodes[0].code, size: sizeKeys[0], rate: 0, currency: "AED" });
+    loadInlCharges();
+  } catch (e) { toast(e.message, "error"); }
+};
+
+// ---- Apply Tariff / Remove Tariff (Charges) — an explicit action only: never automatic. Clicking
+// "Apply Tariff" opens a picker of this job's APPROVED Tariff charge lines (this client's own rate,
+// plus any "all clients" rate) for its direction; picking one or more adds them as real Charge lines,
+// tagged so "Remove Tariff" can undo exactly those rows later.
+window.openApplyTariffChargesModal = async () => {
+  if (!job.booking_saved) return toast("Save Booking Info first — charges can't be added until the booking has been saved.", "error");
+  let rows = [];
+  try { rows = await api("GET", `/api/tariffs/available-charges?direction=${encodeURIComponent(job.direction)}&client=${encodeURIComponent(job.client||"")}`); }
+  catch (e) { return toast(e.message, "error"); }
+  const root = document.getElementById("modalRoot") || (() => { const d = document.createElement("div"); d.id = "modalRoot"; document.body.appendChild(d); return d; })();
+  if (!rows.length) {
+    root.innerHTML = `<div class="modal-backdrop"><div class="modal"><h3>Apply Tariff — Charges</h3>
+      <p class="sub">No approved Tariff has a Charge rate for "${esc(job.direction)}"${job.client?` / client "${esc(job.client)}"`:''} yet.</p>
+      <div class="btn-row" style="margin-top:0;"><button class="btn" id="atcCloseBtn">Close</button></div></div></div>`;
+    document.getElementById("atcCloseBtn").onclick = () => root.innerHTML = "";
+    return;
+  }
+  root.innerHTML = `<div class="modal-backdrop"><div class="modal" style="max-width:560px;">
+    <h3>Apply Tariff — Charges</h3>
+    <p class="sub">Pick the rate lines to add as Charges on this job (direction: ${esc(job.direction)}).</p>
+    <table><thead><tr><th></th><th>Tariff</th><th>Charge</th><th>Size/Type</th><th class="num">Rate</th><th>Scope</th></tr></thead>
+      <tbody>${rows.map(r => `
+        <tr><td><input type="checkbox" class="atcPick" value="${r.id}"></td><td class="mono">${esc(r.tariff_code)}</td>
+          <td>${esc(r.code)} — ${esc(r.charge_name||"")}</td><td>${esc(r.size)}</td>
+          <td class="num mono">${r.currency} ${fmt(r.rate)}</td>
+          <td>${r.client_id ? `Client: ${esc(r.client_name||"")}` : "All clients"}</td></tr>`).join("")}</tbody></table>
+    <div class="btn-row"><button class="btn" id="atcCancelBtn">Cancel</button><button class="btn btn-primary" id="atcApplyBtn">Apply Selected</button></div>
+  </div></div>`;
+  document.getElementById("atcCancelBtn").onclick = () => root.innerHTML = "";
+  document.getElementById("atcApplyBtn").onclick = async () => {
+    const ids = [...document.querySelectorAll(".atcPick:checked")].map(el => Number(el.value));
+    if (!ids.length) return toast("Select at least one line", "error");
+    try {
+      const r = await api("POST", `/api/jobs/${job.id}/apply-tariff-charges`, { ids });
+      toast(`${r.added} Tariff charge line(s) applied`, "success");
+      root.innerHTML = "";
+      loadInlCharges();
+    } catch (e) { toast(e.message, "error"); }
+  };
+};
+window.removeTariffCharges = async () => {
+  if (!confirm("Remove all Tariff-applied Charge lines from this job? Manually-added Charge lines are not affected.")) return;
+  try {
+    const r = await api("POST", `/api/jobs/${job.id}/remove-tariff-charges`);
+    toast(`${r.removed} Tariff charge line(s) removed`, "success");
+    loadInlCharges();
+  } catch (e) { toast(e.message, "error"); }
+};
+
+let inlCurrenciesMaster = [];
+async function loadCurrenciesMaster() {
+  if (!inlCurrenciesMaster.length) { try { inlCurrenciesMaster = await api("GET", "/api/currencies"); } catch (e) { inlCurrenciesMaster = []; } }
+  return inlCurrenciesMaster;
+}
+function masterRateFor(code) {
+  const c = inlCurrenciesMaster.find(c => c.code === code);
+  return c ? c.exchange_rate : null;
+}
+function onInlPcCurrencyChange() {
+  const currency = document.getElementById("inlPcCurrency").value;
+  document.getElementById("inlPcExRateField").style.display = currency === "AED" ? "none" : "block";
+  const rate = masterRateFor(currency);
+  if (rate && currency !== "AED") document.getElementById("inlPcExRate").value = rate;
+}
+function onInlPcBillTypeChange() {
+  const isAdvance = document.getElementById("inlPcBillType").value === "Advance";
+  document.getElementById("inlPcExpenseAccountField").style.display = isAdvance ? "none" : "block";
+}
+function onInlPcModeChange() {
+  const isQty = document.getElementById("inlPcMode").value === "qty";
+  document.getElementById("inlPcFlatField").style.display = isQty ? "none" : "block";
+  document.getElementById("inlPcSizeField").style.display = isQty ? "block" : "none";
+  document.getElementById("inlPcQtyField").style.display = isQty ? "block" : "none";
+  document.getElementById("inlPcRateField").style.display = isQty ? "block" : "none";
+  if (isQty) populateInlPcSizes();
+}
+async function populateInlPcSizes() {
+  const equipment = await api("GET", `/api/jobs/${job.id}/equipment`);
+  const sizes = {};
+  equipment.forEach(e => { if (e.qty > 0) sizes[e.size] = (sizes[e.size]||0) + e.qty; });
+  const sizeKeys = Object.keys(sizes);
+  window._inlPcSizeQty = sizes;
+  document.getElementById("inlPcSize").innerHTML = sizeKeys.map(s=>`<option value="${s}">${s}</option>`).join("") || `<option value="">— Add equipment first —</option>`;
+  onInlPcSizeChange();
+}
+function onInlPcSizeChange() {
+  const size = document.getElementById("inlPcSize").value;
+  const autoQty = (window._inlPcSizeQty || {})[size] || 0;
+  document.getElementById("inlPcQty").value = autoQty;
+}
+function onInlPcQtyRateInput() {} // amount is computed at save time; nothing to preview live here
+window.lookupVendorCode = () => {
+  const code = document.getElementById("inlPcVendorCode").value.trim();
+  if (!code) return;
+  const p = inlAllParties.find(p => p.is_vendor && (p.code||"").toLowerCase() === code.toLowerCase());
+  if (!p) { toast(`No vendor found with code "${code}"`, "error"); return; }
+  document.getElementById("inlPcVendor").value = p.name;
+  onInlPcVendorInput();
+  toast(`Vendor set to ${p.name} (${p.code})`, "success");
+};
+function onInlPcVendorInput() {
+  const name = document.getElementById("inlPcVendor").value.trim();
+  const p = inlAllParties.find(p => p.name.toLowerCase() === name.toLowerCase());
+  document.getElementById("inlPcVendorCode").value = p ? (p.code || "") : "";
+  const box = document.getElementById("inlPcVendorInfo");
+  if (!p) { box.style.display = "none"; return; }
+  const outstanding = inlAllPayables.filter(b => b.vendor.toLowerCase() === name.toLowerCase() && !b.settled)
+    .reduce((s,b) => s + (b.amount - b.settled_amount), 0);
+  box.style.display = "block";
+  box.innerHTML = `Agent: <b>${p.agent_name || "—"}</b> &nbsp;|&nbsp; Total Outstanding (all jobs): <b class="mono">${fmt(outstanding)}</b>`;
+}
+// ---- Apply Tariff / Remove Tariff (Cost) — explicit action only. Requires a vendor to already be
+// picked (Tariff cost rates are always vendor-specific); shows that vendor's APPROVED rate lines for
+// this job's direction, lets the user pick one or more sizes, and adds them as draft Cost lines —
+// qty comes straight from Equipment, exactly like a manual Qty × Rate line.
+window.openApplyTariffCostsModal = async () => {
+  if (!job.booking_saved) return toast("Save Booking Info first — cost/payable lines can't be added until the booking has been saved.", "error");
+  const vendor = document.getElementById("inlPcVendor").value.trim();
+  if (!vendor) return toast("Select a vendor above first — Tariff cost rates are fixed per vendor.", "error");
+  let rows = [];
+  try { rows = await api("GET", `/api/tariffs/available-costs?direction=${encodeURIComponent(job.direction)}&vendor=${encodeURIComponent(vendor)}`); }
+  catch (e) { return toast(e.message, "error"); }
+  const root = document.getElementById("modalRoot") || (() => { const d = document.createElement("div"); d.id = "modalRoot"; document.body.appendChild(d); return d; })();
+  if (!rows.length) {
+    root.innerHTML = `<div class="modal-backdrop"><div class="modal"><h3>Apply Tariff — Cost</h3>
+      <p class="sub">No approved Tariff has a Cost rate for vendor "${esc(vendor)}" / "${esc(job.direction)}" yet.</p>
+      <div class="btn-row" style="margin-top:0;"><button class="btn" id="atcoCloseBtn">Close</button></div></div></div>`;
+    document.getElementById("atcoCloseBtn").onclick = () => root.innerHTML = "";
+    return;
+  }
+  root.innerHTML = `<div class="modal-backdrop"><div class="modal" style="max-width:560px;">
+    <h3>Apply Tariff — Cost</h3>
+    <p class="sub">Vendor <b>${esc(vendor)}</b> — pick the fixed rate lines to add as draft Cost lines (qty from Equipment).</p>
+    <table><thead><tr><th></th><th>Tariff</th><th>Description</th><th>Size/Type</th><th class="num">Rate</th></tr></thead>
+      <tbody>${rows.map(r => `
+        <tr><td><input type="checkbox" class="atcoPick" value="${r.id}"></td><td class="mono">${esc(r.tariff_code)}</td>
+          <td>${esc(r.description)}</td><td>${esc(r.size)}</td><td class="num mono">${r.currency} ${fmt(r.rate)}</td></tr>`).join("")}</tbody></table>
+    <div class="btn-row"><button class="btn" id="atcoCancelBtn">Cancel</button><button class="btn btn-primary" id="atcoApplyBtn">Apply Selected</button></div>
+  </div></div>`;
+  document.getElementById("atcoCancelBtn").onclick = () => root.innerHTML = "";
+  document.getElementById("atcoApplyBtn").onclick = async () => {
+    const ids = [...document.querySelectorAll(".atcoPick:checked")].map(el => Number(el.value));
+    if (!ids.length) return toast("Select at least one line", "error");
+    try {
+      const r = await api("POST", `/api/jobs/${job.id}/apply-tariff-costs`, { ids, vendor });
+      toast(`${r.added} Tariff cost line(s) applied`, "success");
+      root.innerHTML = "";
+      loadInlCostDrafts();
+    } catch (e) { toast(e.message, "error"); }
+  };
+};
+window.removeTariffCosts = async () => {
+  if (!confirm("Remove all still-draft Tariff-applied Cost lines from this job? Manually-added lines and already-billed lines are not affected.")) return;
+  try {
+    const r = await api("POST", `/api/jobs/${job.id}/remove-tariff-costs`);
+    toast(`${r.removed} Tariff cost line(s) removed`, "success");
+    loadInlCostDrafts();
+  } catch (e) { toast(e.message, "error"); }
+};
+async function loadInlPcSection() {
+  const needAccounts = !document.getElementById("inlPcExpenseAccount").options.length;
+  const [partiesResult, accountsResult, jobCharges, payablesResult, jobBills] = await Promise.all([
+    inlAllParties.length ? Promise.resolve(inlAllParties) : api("GET", "/api/parties"),
+    needAccounts ? api("GET", "/api/accounts") : Promise.resolve(null),
+    api("GET", `/api/jobs/${job.id}/charges`),
+    api("GET", "/api/payables"),
+    api("GET", `/api/jobs/${job.id}/payables`),
+  ]);
+  inlAllParties = partiesResult;
+  attachAutocomplete(document.getElementById("inlPcVendor"), () => inlAllParties.filter(p=>p.is_vendor).map(p => ({ label: p.name, sub: p.code||"" })), () => onInlPcVendorInput());
+  attachAutocomplete(document.getElementById("inlPcVendorCode"), () => inlAllParties.filter(p=>p.is_vendor && p.code).map(p => ({ label: p.code, sub: p.name })), (item) => {
+    document.getElementById("inlPcVendor").value = item.sub;
+    onInlPcVendorInput();
+  });
+  if (accountsResult) {
+    inlPcAccounts = accountsResult;
+    document.getElementById("inlPcExpenseAccount").innerHTML = inlPcAccounts.filter(a=>a.type==="Expense").map(a=>`<option value="${a.code}">${a.code} — ${a.name}</option>`).join("");
+    inlPcBankAccounts = inlPcAccounts.filter(a=>a.type==="Asset" && a.code!=="1000");
+  }
+  // "Against Charge" dropdown — lets a Payable/Cost line reference which of this job's own revenue
+  // Charges lines the vendor bill is against (e.g. bill THC because we charged the client THC).
+  window._inlJobCharges = jobCharges;
+  document.getElementById("inlPcChargeRef").innerHTML = `<option value="">— Not linked to a charge —</option>` +
+    jobCharges.map(c => `<option value="${c.id}">${esc(c.code)} — ${esc(c.size)} — ${c.currency} ${fmt(c.amt)}</option>`).join("");
+  inlAllPayables = payablesResult;
+  await loadInlCostDrafts();
+  document.getElementById("inlPcRows").innerHTML = jobBills.map(b => {
+    const outstanding = b.amount - b.settled_amount;
+    return `<tr><td class="mono">${b.bill_no}${b.bill_type==='Advance'?' <span class="badge badge-unsettled">Advance</span>':''}</td><td>${esc(b.vendor)}</td><td>${esc(b.against_ref)||"—"}${b.qty&&b.rate?`<div class="sub" style="font-size:10.5px;">${esc(b.size)||''} × ${b.qty} @ ${b.rate}</div>`:''}${b.charge_ref?`<div class="sub" style="font-size:10.5px;">Against: ${esc(b.charge_ref)}</div>`:''}</td>
+      <td class="num mono">${fmt(b.amount)}${b.currency&&b.currency!=='AED'?` <span class="sub">${b.currency}</span>`:''}</td>
+      <td class="num mono">${fmt(outstanding)}</td>
+      <td><span class="badge ${b.settled?'badge-settled':'badge-unsettled'}">${b.settled?'Paid':'Unpaid'}</span></td>
+      <td>${b.settled ? "" : `<button class="btn btn-sm btn-violet" onclick="openInlPcPaymentModal(${b.id},${outstanding})">Record Payment</button>`}</td></tr>`;
+  }).join("") || `<tr><td colspan="7"><div class="empty">No bills generated for this job yet.</div></td></tr>`;
+}
+async function loadInlCostDrafts() {
+  const drafts = await api("GET", `/api/jobs/${job.id}/costs`);
+  const undbilled = drafts.filter(c => !c.bill_id);
+  document.getElementById("inlCostDraftRows").innerHTML = undbilled.map(c => `
+    <tr data-id="${c.id}">
+      <td><button class="btn btn-sm" onclick="inlDelCostDraft(${c.id})">✕</button></td>
+      <td>${esc(c.vendor)}${c.bill_type==='Advance'?' <span class="badge badge-unsettled">Advance</span>':''}</td>
+      <td>${esc(c.description)||"—"}${c.qty&&c.rate?`<div class="sub" style="font-size:10.5px;">${esc(c.size)||''} × ${c.qty} @ ${c.rate}</div>`:''}${c.charge_ref?`<div class="sub" style="font-size:10.5px;">Against: ${esc(c.charge_ref)}</div>`:''}${c.tariff_cost_id?` <span class="badge badge-settled" style="font-size:9.5px;">Tariff</span>`:''}</td>
+      <td class="num mono">${fmt(c.amt)}${c.currency!=='AED'?` <span class="sub">${c.currency}</span><div class="sub" style="font-size:10.5px;">= AED ${fmt(c.base_amt)}</div>`:''}</td>
+    </tr>`).join("") || `<tr><td colspan="4"><div class="empty">No draft cost lines yet — add one above.</div></td></tr>`;
+  document.getElementById("inlRemoveTariffCostsBtn").style.display = undbilled.some(c => c.tariff_cost_id) ? "inline-block" : "none";
+
+  // Group by vendor so each vendor gets their own "Generate Bill" action + running subtotal.
+  const byVendor = {};
+  undbilled.forEach(c => { (byVendor[c.vendor] = byVendor[c.vendor] || []).push(c); });
+  const vendors = Object.keys(byVendor);
+  const chargesApproved = !!job.charges_approved;
+  document.getElementById("inlGenerateBillBox").innerHTML = vendors.length ? vendors.map(v => {
+    const total = byVendor[v].reduce((s,c)=>s+c.amt,0);
+    const ccy = byVendor[v][0].currency;
+    return `<div class="btn-row" style="background:#F7F8F9;padding:10px 14px;border-radius:8px;border:1px solid var(--line);margin-top:6px;">
+      <div><b>${esc(v)}</b> — ${byVendor[v].length} draft line(s), total <b class="mono">${ccy} ${fmt(total)}</b></div>
+      <button class="btn btn-sm btn-primary" ${chargesApproved?"":"disabled"} title="${chargesApproved?"":"Approve Charges above first"}" onclick="generateBillForVendor('${esc(v).replace(/'/g,"&#39;")}')">Generate Bill</button>
+    </div>`;
+  }).join("") + (!chargesApproved ? `<div class="sub" style="margin-top:6px;">⚠ Approve Charges above before generating a bill.</div>` : "") : "";
+}
+window.inlDelCostDraft = async (id) => {
+  try { await api("DELETE", `/api/costs/${id}`); loadInlCostDrafts(); }
+  catch(e){ toast(e.message, "error"); }
+};
+window.generateBillForVendor = async (vendor) => {
+  if (!confirm(`Generate one bill for "${vendor}" from their draft cost lines? This posts to the ledger and can't be undone by editing — only by deleting the bill.`)) return;
+  try {
+    const bill = await api("POST", `/api/jobs/${job.id}/generate-bill`, { vendor });
+    toast(`Bill ${bill.bill_no} generated`, "success");
+    loadInlPcSection();
+  } catch(e){ toast(e.message, "error"); }
+};
+document.getElementById("inlPcAddBtn").onclick = async () => {
+  if (!job.booking_saved) return toast("Save Booking Info first — cost/payable lines can't be added until the booking has been saved.", "error");
+  const vendor = document.getElementById("inlPcVendor").value.trim();
+  const currency = document.getElementById("inlPcCurrency").value;
+  const exchange_rate = currency === "AED" ? 1 : Number(document.getElementById("inlPcExRate").value);
+  const billType = document.getElementById("inlPcBillType").value;
+  const isQty = document.getElementById("inlPcMode").value === "qty";
+  const description = billType === "Advance" ? "Advance payment" : document.getElementById("inlPcDesc").value.trim();
+  if (!vendor) return toast("Enter a vendor", "error");
+  if (currency !== "AED" && !exchange_rate) return toast(`Enter the exchange rate for ${currency} → AED`, "error");
+  if (billType !== "Advance" && !description) return toast("Enter a description", "error");
+
+  const chargeRefSelect = document.getElementById("inlPcChargeRef");
+  const chargeId = chargeRefSelect.value || null;
+  const chargeRefText = chargeId ? chargeRefSelect.options[chargeRefSelect.selectedIndex].textContent : null;
+
+  const payload = { vendor, currency, exchange_rate, bill_type: billType,
+    expense_account: document.getElementById("inlPcExpenseAccount").value, description,
+    charge_id: chargeId, charge_ref: chargeRefText };
+  if (isQty) {
+    const size = document.getElementById("inlPcSize").value;
+    const qty = Number(document.getElementById("inlPcQty").value);
+    const rate = Number(document.getElementById("inlPcRate").value);
+    if (!size || !qty || !rate) return toast("Pick a size and enter qty & rate", "error");
+    Object.assign(payload, { size, qty, rate });
+  } else {
+    const amount = Number(document.getElementById("inlPcAmount").value);
+    if (!amount) return toast("Enter an amount", "error");
+    payload.amount = amount;
+  }
+  try {
+    await api("POST", `/api/jobs/${job.id}/costs`, payload);
+    toast("Draft cost line added", "success");
+    document.getElementById("inlPcVendor").value = ""; document.getElementById("inlPcVendorCode").value = ""; document.getElementById("inlPcAmount").value = "";
+    document.getElementById("inlPcQty").value = ""; document.getElementById("inlPcRate").value = ""; document.getElementById("inlPcDesc").value = "";
+    document.getElementById("inlPcChargeRef").value = "";
+    document.getElementById("inlPcVendorInfo").style.display = "none";
+    loadInlCostDrafts();
+  } catch(e){ toast(e.message, "error"); }
+};
+window.openInlPcPaymentModal = (id, outstanding) => {
+  const bill = inlAllPayables.find(b => b.id === id);
+  const root = document.getElementById("modalRoot") || (() => { const d = document.createElement("div"); d.id = "modalRoot"; document.body.appendChild(d); return d; })();
+  root.innerHTML = `
+    <div class="modal-backdrop">
+      <div class="modal">
+        <h3>Record Payment</h3>
+        <p class="sub">Against bill <b class="mono">${bill.bill_no}</b> — ${esc(bill.vendor)}</p>
+        <div class="field" style="margin-bottom:12px;"><label>Date</label><input type="date" id="ipmDate" value="${new Date().toISOString().slice(0,10)}"></div>
+        <div class="field" style="margin-bottom:12px;"><label>Amount * <span class="sub" style="font-weight:400;">(outstanding ${fmt(outstanding)})</span></label><input type="number" id="ipmAmount" step="0.01" value="${outstanding}"></div>
+        <div class="field" style="margin-bottom:12px;"><label>Pay From (Bank/Cash Account) *</label>
+          <select id="ipmBank">${inlPcBankAccounts.map(a=>`<option value="${a.code}">${a.code} — ${a.name}</option>`).join("")}</select>
+        </div>
+        <div class="field" style="margin-bottom:12px;"><label>Payment Mode *</label>
+          <select id="ipmMode" onchange="onIpmModeChange()"><option value="Cash">Cash</option><option value="Online">Online</option><option value="Cheque">Cheque</option></select>
+        </div>
+        <div id="ipmModeExtra" style="margin-bottom:16px;"></div>
+        <div class="btn-row" style="margin-top:0;"><button class="btn" id="ipmCancel">Cancel</button><button class="btn btn-violet" id="ipmSave">Save Payment</button></div>
+      </div>
+    </div>`;
+  window.onIpmModeChange = () => {
+    const mode = document.getElementById("ipmMode").value;
+    const box = document.getElementById("ipmModeExtra");
+    if (mode === "Cash") box.innerHTML = `<div class="field"><label>Narration <span class="sub" style="font-weight:400;">(optional)</span></label><input id="ipmNarration" placeholder="e.g. Paid in cash"></div>`;
+    else if (mode === "Online") box.innerHTML = `<div class="field"><label>Transaction Number *</label><input id="ipmRef" placeholder="e.g. FT26123456789"></div>`;
+    else box.innerHTML = `<div class="field"><label>Cheque Number *</label><input id="ipmRef" placeholder="e.g. 000456"></div>`;
+  };
+  onIpmModeChange();
+  document.getElementById("ipmCancel").onclick = () => { root.innerHTML = ""; };
+  document.getElementById("ipmSave").onclick = async () => {
+    const amount = Number(document.getElementById("ipmAmount").value);
+    if (!amount || amount <= 0) return toast("Enter a valid amount", "error");
+    const mode = document.getElementById("ipmMode").value;
+    const refEl = document.getElementById("ipmRef");
+    const narrEl = document.getElementById("ipmNarration");
+    if (refEl && !refEl.value.trim()) return toast(`Enter the ${mode === "Online" ? "transaction number" : "cheque number"}`, "error");
+    try {
+      await api("POST", `/api/payables/${id}/payment`, {
+        amount, bank_account: document.getElementById("ipmBank").value,
+        date: document.getElementById("ipmDate").value, payment_mode: mode,
+        reference_no: refEl ? refEl.value.trim() : "", narration: narrEl ? narrEl.value.trim() : "",
+      });
+      toast("Payment posted", "success");
+      root.innerHTML = "";
+      loadInlPcSection();
+    } catch(e){ toast(e.message, "error"); }
+  };
+};
+onInlPcCurrencyChange();
+onInlPcBillTypeChange();
+onInlPcModeChange();
+
+(async function init() {
+  const me = await renderTopNav("job/booking.html");
+  currentUser = me;
+  const dirOptions = [];
+  if (!me || me.can_export) dirOptions.push("Export");
+  if (me && me.can_import) dirOptions.push("Import");
+  const defaultDirection = dirOptions[0] || "Export";
+  document.getElementById("direction").innerHTML = (dirOptions.length ? dirOptions : ["Export"]).map(d=>`<option>${d}</option>`).join("");
+  renderJobSearchBox("jobSearchBox", (j) => { job = j; setCurrentJobId(j.id); showFormView(); fillForm(job); toast(`Loaded ${j.job_no}`, "success"); loadInlineSections(); });
+  // These don't depend on each other, so fetch them all at once instead of one-by-one — this
+  // alone was adding several sequential round-trips (the "form loads slowly" complaint).
+  const wantsOpen = new URLSearchParams(location.search).get("open") === "1";
+  const id = wantsOpen ? getCurrentJobId() : null;
+  const [, , , , jobResult] = await Promise.all([
+    loadVessels(), loadParties(), loadPorts(), loadCurrenciesMaster(),
+    id ? api("GET", `/api/jobs/${id}`).catch(() => null) : Promise.resolve(null),
+  ]);
+  loadRecentBookings();
+  if (jobResult) {
+    job = jobResult;
+    showFormView();
+    fillForm(job);
+    loadInlineSections();
+  } else {
+    showListView();
+  }
+})();
+</script>
+</body>
+</html>

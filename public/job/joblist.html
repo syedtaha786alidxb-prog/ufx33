@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Job List — Harbor Desk</title><link rel="stylesheet" href="/css/style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+</head>
+<body>
+<div class="topnav" id="topnav"></div>
+<div class="wrap">
+  <div class="panel">
+    <div style="display:flex;justify-content:space-between;flex-wrap:wrap;align-items:flex-end;">
+      <h2>Job List</h2>
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-sm" onclick="window.print()">🖨 Print</button>
+        <button class="btn btn-sm btn-teal" id="exportBtn">⭳ Export</button>
+      </div>
+    </div>
+    <p class="sub">Every job created, with booking/charges approval status and invoice.</p>
+    <div id="jobSearchBox"></div>
+    <div class="grid" style="margin:10px 0;">
+      <div class="field"><label>Direction</label><select id="fDirection"><option value="">All</option><option>Export</option><option>Import</option></select></div>
+      <div class="field"><label>From Date</label><input type="date" id="fFrom"></div>
+      <div class="field"><label>To Date</label><input type="date" id="fTo"></div>
+      <div class="field"><label>Client</label><input id="fClient" placeholder="Filter by client name"></div>
+    </div>
+    <div class="btn-row" style="margin:0 0 10px;"><button class="btn btn-sm" id="fApplyBtn">Apply Filter</button><button class="btn btn-sm" id="fClearBtn">Clear</button></div>
+    <table>
+      <thead><tr><th>Job #</th><th>Dir.</th><th>Client</th><th>Vessel / Voyage</th><th>Booking</th><th>Charges</th><th>Invoice #</th><th class="num">Amount</th><th>Status</th><th>Bill Payment</th><th></th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+</div>
+<div id="modalRoot"></div>
+<script src="/js/api.js"></script>
+<script>
+let allowDelete = false;
+let bankAccounts = [];
+let allJobs = [];
+let filteredJobs = [];
+async function load() {
+  allJobs = await api("GET", "/api/jobs");
+  applyFilter();
+}
+function applyFilter() {
+  const dir = document.getElementById("fDirection").value;
+  const from = document.getElementById("fFrom").value;
+  const to = document.getElementById("fTo").value;
+  const client = document.getElementById("fClient").value.trim().toLowerCase();
+  filteredJobs = allJobs.filter(j => {
+    if (dir && j.direction !== dir) return false;
+    if (from && (!j.job_date || j.job_date < from)) return false;
+    if (to && (!j.job_date || j.job_date > to)) return false;
+    if (client && !(j.client||"").toLowerCase().includes(client)) return false;
+    return true;
+  });
+  renderRows(filteredJobs);
+}
+document.getElementById("fApplyBtn").onclick = applyFilter;
+document.getElementById("fClearBtn").onclick = () => {
+  document.getElementById("fDirection").value = ""; document.getElementById("fFrom").value = "";
+  document.getElementById("fTo").value = ""; document.getElementById("fClient").value = "";
+  applyFilter();
+};
+function renderRows(jobs) {
+  document.getElementById("rows").innerHTML = jobs.map(j => `
+    <tr>
+      <td class="mono">${j.job_no}</td>
+      <td><span class="badge ${j.direction==='Import'?'badge-unsettled':'badge-settled'}">${esc(j.direction)||'Export'}</span></td>
+      <td>${esc(j.client)||"—"}</td>
+      <td>${j.vessel_name ? esc(j.vessel_name) + (j.voyage_no?(" / "+esc(j.voyage_no)):"") : "—"}</td>
+      <td><span class="badge ${j.booking_approved?'badge-settled':'badge-unsettled'}">${j.booking_approved?'Approved':'Draft'}</span></td>
+      <td><span class="badge ${j.job_approved?'badge-settled':'badge-unsettled'}">${j.job_approved?'Approved':'Draft'}</span></td>
+      <td class="mono">${j.invoice ? j.invoice.txn : "—"}</td>
+      <td class="num mono">${j.invoice ? fmt(j.invoice.amount) : "—"}</td>
+      <td>${j.invoice ? `<span class="badge ${j.invoice.settled?'badge-settled':'badge-unsettled'}">${j.invoice.settled?'Settled':'Unsettled'}</span>` : `<span class="badge badge-unsettled">No Invoice</span>`}</td>
+      <td><button class="btn btn-sm btn-violet" onclick="openBillsModal(${j.id},'${(j.job_no||'').replace(/'/g,"\\'")}')">💰 Bills</button></td>
+      <td style="display:flex;gap:6px;">
+        <button class="btn btn-sm btn-orange" onclick="openJob(${j.id})">Open</button>
+        ${allowDelete ? `<button class="btn btn-sm" onclick="delJob(${j.id})">✕ Delete</button>` : ""}
+      </td>
+    </tr>`).join("") || `<tr><td colspan="11"><div class="empty">No jobs yet.</div></td></tr>`;
+}
+let _jlCurrentUser = null;
+document.getElementById("exportBtn").onclick = async () => {
+  const from = document.getElementById("fFrom").value, to = document.getElementById("fTo").value;
+  const dateRangeLabel = (from || to) ? `${from||"start"} to ${to||"today"}` : "All dates";
+  await exportRowsToExcel({
+    rows: filteredJobs,
+    columns: [
+      { key: "job_no", label: "Job #" },
+      { key: "direction", label: "Direction" },
+      { key: "job_date", label: "Date" },
+      { key: "client", label: "Client" },
+      { key: "vessel_name", label: "Vessel" },
+      { key: "voyage_no", label: "Voyage" },
+      { key: "booking_approved", label: "Booking Approved", value: r => r.booking_approved ? "Yes" : "No" },
+      { key: "job_approved", label: "Charges Approved", value: r => r.job_approved ? "Yes" : "No" },
+      { key: "invoice_txn", label: "Invoice #", value: r => r.invoice ? r.invoice.txn : "" },
+      { key: "invoice_amount", label: "Invoice Amount", value: r => r.invoice ? r.invoice.amount : 0, sum: true },
+      { key: "cost_total", label: "Cost Total", sum: true },
+    ],
+    reportTitle: "Job List Report",
+    dateRangeLabel,
+    fileName: "job-list-export.xlsx",
+    sheetName: "Job List",
+    user: _jlCurrentUser ? _jlCurrentUser.name : "",
+  });
+};
+window.openJob = (id) => { setCurrentJobId(id); window.location.href = "/job/booking.html?open=1"; };
+window.delJob = async (id) => {
+  const reason = await confirmWithReason("Delete Job", "This removes its equipment, charges, B/L, containers and invoice. This can't be undone.");
+  if (!reason) return;
+  try { await api("DELETE", `/api/jobs/${id}`, { reason }); toast("Job deleted","success"); load(); }
+  catch(e){ toast(e.message,"error"); }
+};
+
+/* ---- Bill Payment — vendor bills tied to this job, with Pay directly from the list ---- */
+window.openBillsModal = async (jobId, jobNo) => {
+  const bills = await api("GET", `/api/jobs/${jobId}/payables`);
+  const root = document.getElementById("modalRoot");
+  root.innerHTML = `
+    <div class="modal-backdrop">
+      <div class="modal" style="max-width:640px;">
+        <h3>Vendor Bills — Job ${esc(jobNo)}</h3>
+        <p class="sub">Every bill recorded against this job's Payable/Cost — regardless of which vendor.</p>
+        <table><thead><tr><th>Bill #</th><th>Vendor</th><th>Description</th><th class="num">Amount</th><th class="num">Outstanding</th><th>Status</th><th></th></tr></thead>
+          <tbody id="billsModalRows">${renderBillsModalRows(bills)}</tbody></table>
+        <div class="btn-row" style="margin-top:16px;"><button class="btn" id="billsModalClose">Close</button></div>
+      </div>
+    </div>`;
+  document.getElementById("billsModalClose").onclick = () => { root.innerHTML = ""; };
+  window._billsModalJobId = jobId;
+};
+function renderBillsModalRows(bills) {
+  return bills.map(b => {
+    const outstanding = b.amount - b.settled_amount;
+    return `<tr><td class="mono">${b.bill_no}${b.bill_type==='Advance'?' <span class="badge badge-unsettled">Advance</span>':''}</td><td>${esc(b.vendor)}</td><td>${esc(b.against_ref)||"—"}</td>
+      <td class="num mono">${fmt(b.amount)}${b.currency&&b.currency!=='AED'?` <span class="sub">${b.currency}</span>`:''}</td>
+      <td class="num mono">${fmt(outstanding)}</td>
+      <td><span class="badge ${b.settled?'badge-settled':'badge-unsettled'}">${b.settled?'Paid':'Unpaid'}</span></td>
+      <td>${b.settled ? "" : `<button class="btn btn-sm btn-violet" onclick="openBillPaymentModal(${b.id},${outstanding},'${b.bill_no}','${(b.vendor||'').replace(/'/g,"\\'")}')">Pay</button>`}</td></tr>`;
+  }).join("") || `<tr><td colspan="7"><div class="empty">No vendor bills recorded for this job yet.</div></td></tr>`;
+}
+window.openBillPaymentModal = async (id, outstanding, billNo, vendor) => {
+  if (!bankAccounts.length) bankAccounts = (await api("GET","/api/accounts")).filter(a=>a.type==="Asset" && a.code!=="1000");
+  const root = document.getElementById("modalRoot");
+  const existing = root.innerHTML;
+  root.innerHTML = `
+    <div class="modal-backdrop">
+      <div class="modal">
+        <h3>Record Payment</h3>
+        <p class="sub">Against bill <b class="mono">${esc(billNo)}</b> — ${esc(vendor)}</p>
+        <div class="field" style="margin-bottom:12px;"><label>Date</label><input type="date" id="jlPmDate" value="${new Date().toISOString().slice(0,10)}"></div>
+        <div class="field" style="margin-bottom:12px;"><label>Amount * <span class="sub" style="font-weight:400;">(outstanding ${fmt(outstanding)})</span></label><input type="number" id="jlPmAmount" step="0.01" value="${outstanding}"></div>
+        <div class="field" style="margin-bottom:12px;"><label>Pay From (Bank/Cash Account) *</label>
+          <select id="jlPmBank">${bankAccounts.map(a=>`<option value="${a.code}">${a.code} — ${a.name}</option>`).join("")}</select>
+        </div>
+        <div class="field" style="margin-bottom:12px;"><label>Payment Mode *</label>
+          <select id="jlPmMode" onchange="onJlPmModeChange()"><option value="Cash">Cash</option><option value="Online">Online</option><option value="Cheque">Cheque</option></select>
+        </div>
+        <div id="jlPmModeExtra" style="margin-bottom:16px;"></div>
+        <div class="btn-row" style="margin-top:0;"><button class="btn" id="jlPmCancel">Cancel</button><button class="btn btn-violet" id="jlPmSave">Save Payment</button></div>
+      </div>
+    </div>`;
+  window.onJlPmModeChange = () => {
+    const mode = document.getElementById("jlPmMode").value;
+    const box = document.getElementById("jlPmModeExtra");
+    if (mode === "Cash") box.innerHTML = `<div class="field"><label>Narration <span class="sub" style="font-weight:400;">(optional)</span></label><input id="jlPmNarration" placeholder="e.g. Paid in cash"></div>`;
+    else if (mode === "Online") box.innerHTML = `<div class="field"><label>Transaction Number *</label><input id="jlPmRef" placeholder="e.g. FT26123456789"></div>`;
+    else box.innerHTML = `<div class="field"><label>Cheque Number *</label><input id="jlPmRef" placeholder="e.g. 000456"></div>`;
+  };
+  onJlPmModeChange();
+  document.getElementById("jlPmCancel").onclick = async () => { await openBillsModal(window._billsModalJobId, ""); };
+  document.getElementById("jlPmSave").onclick = async () => {
+    const amount = Number(document.getElementById("jlPmAmount").value);
+    if (!amount || amount <= 0) return toast("Enter a valid amount", "error");
+    const mode = document.getElementById("jlPmMode").value;
+    const refEl = document.getElementById("jlPmRef");
+    const narrEl = document.getElementById("jlPmNarration");
+    if (refEl && !refEl.value.trim()) return toast(`Enter the ${mode === "Online" ? "transaction number" : "cheque number"}`, "error");
+    try {
+      await api("POST", `/api/payables/${id}/payment`, {
+        amount, bank_account: document.getElementById("jlPmBank").value,
+        date: document.getElementById("jlPmDate").value, payment_mode: mode,
+        reference_no: refEl ? refEl.value.trim() : "", narration: narrEl ? narrEl.value.trim() : "",
+      });
+      toast("Payment posted", "success");
+      const jobId = window._billsModalJobId;
+      const bills = await api("GET", `/api/jobs/${jobId}/payables`);
+      root.innerHTML = existing; // restore the bills-list modal shell, then refresh its rows
+      document.getElementById("billsModalRows").innerHTML = renderBillsModalRows(bills);
+      document.getElementById("billsModalClose").onclick = () => { root.innerHTML = ""; };
+      load();
+    } catch(e){ toast(e.message, "error"); }
+  };
+};
+
+(async function init() {
+  const me = await renderTopNav("job/joblist.html");
+  _jlCurrentUser = me;
+  allowDelete = canDelete(me);
+  renderJobSearchBox("jobSearchBox", (j) => { window.location.href = "/job/booking.html?open=1"; });
+  load();
+})();
+</script>
+</body>
+</html>

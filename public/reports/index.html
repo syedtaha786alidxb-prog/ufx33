@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Reports — Harbor Desk</title><link rel="stylesheet" href="/css/style.css"></head>
+<body>
+<div class="topnav" id="topnav"></div>
+<div class="wrap">
+  <div class="panel">
+    <h2>Reports</h2>
+    <p class="sub">Green = live data from this database. Gold = standard template, ready to be wired to real data.</p>
+    <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+      <select id="reportSelect" style="max-width:420px;"></select>
+      <a href="/reports/edi.html" class="btn btn-gold" style="text-decoration:none;">📤 EDI</a>
+    </div>
+  </div>
+  <div class="panel" id="reportPanel"></div>
+</div>
+<script src="/js/api.js"></script>
+<script>
+renderTopNav("reports/index.html");
+const REPORTS = [
+  {key:"job_balancing", title:"SE Job Balancing", live:true},
+  {key:"job_list", title:"SE Job List", live:true},
+  {key:"job_container_list", title:"SE Job Wise Container List", live:true},
+  {key:"charges_wise_job", title:"SE Charges Wise Job Report", live:true},
+  {key:"job_pl", title:"SE Job Profit and Loss Report", live:true},
+  {key:"party_soa", title:"Party SOA", live:true},
+  {key:"party_audit", title:"Party Audit", live:true},
+  {key:"loading_list", title:"Loading List", live:false, columns:["Job #","Vessel","Voyage","Container #","Size/Type","Loading Date","Terminal","Status"]},
+  {key:"agent_invoice_balancing", title:"SE Agent Invoice Balancing", live:false, columns:["Agent","Invoice #","Job #","Currency","Invoice Amount","Received","Balance","Status"]},
+  {key:"job_statistics", title:"SE Job Statistics", live:true},
+  {key:"vat_report", title:"SE VAT Report", live:false, columns:["Invoice #","Job #","Client","Taxable Amount","VAT Rate","VAT Amount","Invoice Date"]},
+  {key:"tds_report", title:"SE TDS Report", live:false, columns:["Vendor","Bill #","Job #","Gross Amount","TDS Rate","TDS Amount","Net Payable"]},
+  {key:"client_exposure", title:"SE Client Exposure Report", live:true},
+  {key:"bl_release_status", title:"BL Release Status Report", live:true},
+  {key:"outstanding_by_vessel", title:"Outstanding by Vessel", live:true},
+  {key:"cargo_movement", title:"SE Cargo Movement", live:false, columns:["Job #","Container #","Event","Location","Date/Time","Remarks"]},
+  {key:"stuffing_report", title:"Stuffing Report", live:false, columns:["Job #","Container #","Commodity","Packages","Stuffing Date","Warehouse","Supervisor"]},
+  {key:"milestone_status", title:"SE Milestone Status", live:false, columns:["Job #","Milestone","Planned Date","Actual Date","Status","Remarks"]},
+  {key:"debit_credit_notes", title:"SE Debit Credit Notes List", live:false, columns:["Note #","Type","Job #","Party","Amount","Currency","Date","Reason"]},
+  {key:"loading_program_list", title:"Loading Program List", live:false, columns:["Program #","Vessel","Voyage","Cut-Off Date","Total Containers","Terminal","Status"]},
+];
+document.getElementById("reportSelect").innerHTML = REPORTS.map(r=>`<option value="${r.key}">${r.live?'●':'○'} ${r.title}</option>`).join("");
+
+function header(def){ return `<div style="display:flex;justify-content:space-between;flex-wrap:wrap;margin-bottom:14px;">
+  <div><h2 style="margin:0;">${def.title}</h2><p class="sub">${def.live?"Live data from this database.":"Standard template — ready to be wired to live records."}</p></div>
+  <span class="badge ${def.live?'badge-settled':'badge-unsettled'}">${def.live?'● Live Data':'○ Template'}</span></div>`; }
+
+async function renderReport(key) {
+  const def = REPORTS.find(r=>r.key===key);
+  const panel = document.getElementById("reportPanel");
+  if (!def.live) {
+    panel.innerHTML = header(def) + `<table><thead><tr>${def.columns.map(c=>`<th>${c}</th>`).join("")}</tr></thead>
+      <tbody><tr><td colspan="${def.columns.length}"><div class="empty">No data yet — columns are standardized and ready for this module's data feed.</div></td></tr></tbody></table>`;
+    return;
+  }
+  panel.innerHTML = header(def) + `<div class="empty">Loading…</div>`;
+  if (key === "job_list") {
+    const jobs = await api("GET", "/api/reports/job-list");
+    panel.innerHTML = header(def) + `<table><thead><tr><th>Job #</th><th>Client</th><th>Vessel/Voyage</th><th>Invoice #</th><th class="num">Amount</th><th>Status</th></tr></thead>
+      <tbody>${jobs.map(j=>`<tr><td class="mono">${j.job_no}</td><td>${j.client||"—"}</td><td>${j.vessel_name?j.vessel_name+" / "+(j.voyage_no||""):"—"}</td>
+      <td class="mono">${j.invoice?j.invoice.txn:"—"}</td><td class="num mono">${j.invoice?fmt(j.invoice.amount):"—"}</td>
+      <td>${j.invoice?`<span class="badge ${j.invoice.settled?'badge-settled':'badge-unsettled'}">${j.invoice.settled?'Settled':'Unsettled'}</span>`:'—'}</td></tr>`).join("") || `<tr><td colspan="6"><div class="empty">No jobs yet.</div></td></tr>`}</tbody></table>`;
+  } else if (key === "job_container_list") {
+    const rows = await api("GET", "/api/reports/job-containers");
+    panel.innerHTML = header(def) + `<table><thead><tr><th>Job #</th><th>Container #</th><th>Seal #</th><th>Size/Type</th><th class="num">Gross Wt</th></tr></thead>
+      <tbody>${rows.map(r=>`<tr><td class="mono">${r.job_no}</td><td class="mono">${r.no}</td><td>${r.seal||"—"}</td><td>${r.size}</td><td class="num mono">${fmt(r.weight)}</td></tr>`).join("") || `<tr><td colspan="5"><div class="empty">No containers yet.</div></td></tr>`}</tbody></table>`;
+  } else if (key === "charges_wise_job") {
+    const rows = await api("GET", "/api/reports/charges-wise-job");
+    panel.innerHTML = header(def) + `<table><thead><tr><th>Job #</th><th>Charge</th><th>Size/Type</th><th class="num">Qty</th><th class="num">Rate</th><th>Ccy</th><th class="num">Amount</th></tr></thead>
+      <tbody>${rows.map(r=>`<tr><td class="mono">${r.job_no}</td><td>${r.code}</td><td>${r.size}</td><td class="num mono">${r.qty}</td><td class="num mono">${fmt(r.rate)}</td><td>${r.currency}</td><td class="num mono">${fmt(r.amt)}</td></tr>`).join("") || `<tr><td colspan="7"><div class="empty">No charges yet.</div></td></tr>`}</tbody></table>`;
+  } else if (key === "job_pl") {
+    const rows = await api("GET", "/api/reports/job-pl");
+    panel.innerHTML = header(def) + `<table><thead><tr><th>Job #</th><th>Client</th><th class="num">Revenue</th><th class="num">Cost</th><th class="num">Profit</th></tr></thead>
+      <tbody>${rows.map(r=>`<tr><td class="mono">${r.job_no}</td><td>${r.client||"—"}</td><td class="num mono">${fmt(r.revenue)}</td><td class="num mono">${fmt(r.cost)}</td><td class="num mono">${fmt(r.profit)}</td></tr>`).join("") || `<tr><td colspan="5"><div class="empty">No invoiced jobs yet.</div></td></tr>`}</tbody></table>`;
+  } else if (key === "job_balancing") {
+    const rows = await api("GET", "/api/reports/job-balancing");
+    panel.innerHTML = header(def) + `<table><thead><tr><th>Job #</th><th>Client</th><th class="num">Invoiced</th><th class="num">Received</th><th class="num">AR Out.</th><th class="num">Billed</th><th class="num">Paid</th><th class="num">AP Out.</th></tr></thead>
+      <tbody>${rows.map(r=>`<tr><td class="mono">${r.job_no}</td><td>${r.client||"—"}</td><td class="num mono">${fmt(r.invoiced)}</td><td class="num mono">${fmt(r.received)}</td><td class="num mono">${fmt(r.ar_outstanding)}</td><td class="num mono">${fmt(r.billed)}</td><td class="num mono">${fmt(r.paid)}</td><td class="num mono">${fmt(r.ap_outstanding)}</td></tr>`).join("") || `<tr><td colspan="8"><div class="empty">No jobs yet.</div></td></tr>`}</tbody></table>`;
+  } else if (key === "client_exposure") {
+    const rows = await api("GET", "/api/reports/client-exposure");
+    panel.innerHTML = header(def) + `<table><thead><tr><th>Client</th><th class="num">Invoiced</th><th class="num">Received</th><th class="num">Exposure</th></tr></thead>
+      <tbody>${rows.map(r=>`<tr><td>${r.client||"—"}</td><td class="num mono">${fmt(r.invoiced)}</td><td class="num mono">${fmt(r.received)}</td><td class="num mono">${fmt(r.exposure)}</td></tr>`).join("") || `<tr><td colspan="4"><div class="empty">No clients invoiced yet.</div></td></tr>`}</tbody></table>`;
+  } else if (key === "job_statistics") {
+    const s = await api("GET", "/api/reports/job-statistics");
+    panel.innerHTML = header(def) + `<div class="kpi-grid">
+      <div class="kpi"><span>Total Jobs</span><b class="mono">${s.totalJobs}</b></div>
+      <div class="kpi"><span>Approved</span><b class="mono">${s.approvedJobs}</b></div>
+      <div class="kpi"><span>Total Containers</span><b class="mono">${s.totalContainers}</b></div>
+      <div class="kpi"><span>Total Revenue</span><b class="mono">${fmt(s.totalRevenue)}</b></div>
+      <div class="kpi"><span>Outstanding</span><b class="mono">${fmt(s.totalOutstanding)}</b></div>
+      <div class="kpi"><span>Avg Revenue/Job</span><b class="mono">${fmt(s.avgRevenue)}</b></div></div>`;
+  } else if (key === "bl_release_status") {
+    const rows = await api("GET", "/api/reports/bl-release-status");
+    panel.innerHTML = header(def) + `<table><thead><tr><th>Job #</th><th>Client</th><th>HBL #</th><th>MBL #</th><th>Release Status</th><th>Handover</th></tr></thead>
+      <tbody>${rows.map(r=>`<tr><td class="mono">${r.job_no}</td><td>${r.client||"—"}</td><td class="mono">${r.hbl||"—"}</td><td class="mono">${r.mbl||"—"}</td><td>${r.release_status||"—"}</td><td>${r.handover_type||"—"}</td></tr>`).join("") || `<tr><td colspan="6"><div class="empty">No B/Ls yet.</div></td></tr>`}</tbody></table>`;
+  } else if (key === "outstanding_by_vessel") {
+    const rows = await api("GET", "/api/reports/outstanding-by-vessel");
+    panel.innerHTML = header(def) + `<table><thead><tr><th>Vessel</th><th class="num">AR Outstanding</th><th class="num">AP Outstanding</th></tr></thead>
+      <tbody>${rows.map(r=>`<tr><td>${r.vessel}</td><td class="num mono">${fmt(r.ar_outstanding)}</td><td class="num mono">${fmt(r.ap_outstanding)}</td></tr>`).join("") || `<tr><td colspan="3"><div class="empty">No vessels yet.</div></td></tr>`}</tbody></table>`;
+  } else if (key === "party_soa" || key === "party_audit") {
+    const jobs = await api("GET", "/api/jobs");
+    const names = key==="party_soa" ? [...new Set(jobs.map(j=>j.client).filter(Boolean))] : [...new Set((await api("GET","/api/payables")).map(b=>b.vendor))];
+    panel.innerHTML = header(def) + `<div class="field" style="max-width:320px;margin-bottom:14px;"><label>${key==='party_soa'?'Customer':'Vendor'}</label>
+      <select id="partySel">${names.length?names.map(n=>`<option>${n}</option>`).join(""):"<option>None yet</option>"}</select></div><div id="soaBody"></div>`;
+    async function renderSoa() {
+      const name = document.getElementById("partySel").value;
+      if (!names.length) { document.getElementById("soaBody").innerHTML = `<div class="empty">No data yet.</div>`; return; }
+      const url = key==="party_soa" ? `/api/reports/party-soa/${encodeURIComponent(name)}` : `/api/reports/party-audit/${encodeURIComponent(name)}`;
+      const rows = await api("GET", url);
+      document.getElementById("soaBody").innerHTML = `<table><thead><tr><th>Date</th><th>Type</th><th>Ref</th><th class="num">Debit</th><th class="num">Credit</th><th class="num">Balance</th></tr></thead>
+        <tbody>${rows.map(r=>`<tr><td>${r.date}</td><td>${r.type}</td><td class="mono">${r.ref}</td><td class="num mono">${r.debit?fmt(r.debit):''}</td><td class="num mono">${r.credit?fmt(r.credit):''}</td><td class="num mono">${fmt(r.balance)}</td></tr>`).join("") || `<tr><td colspan="6"><div class="empty">No transactions yet.</div></td></tr>`}</tbody></table>`;
+    }
+    document.getElementById("partySel").onchange = renderSoa;
+    renderSoa();
+  }
+}
+document.getElementById("reportSelect").onchange = (e) => renderReport(e.target.value);
+renderReport(REPORTS[0].key);
+</script>
+</body>
+</html>

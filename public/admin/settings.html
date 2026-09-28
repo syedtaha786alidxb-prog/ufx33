@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Settings — Harbor Desk</title><link rel="stylesheet" href="/css/style.css"></head>
+<body>
+<div class="topnav" id="topnav"></div>
+<div class="wrap">
+  <div class="panel">
+    <h2>Company Profile</h2>
+    <p class="sub">Shown on every invoice — logo and details in the header, address/contact repeated in the footer.</p>
+    <div class="grid">
+      <div class="field"><label>Company Name</label><input id="coName" placeholder="Harbor Desk Shipping LLC"></div>
+      <div class="field"><label>Phone</label><input id="coPhone" placeholder="+971-4-1234567"></div>
+      <div class="field" style="grid-column:span 2;"><label>Address</label><input id="coAddress" placeholder="Office 12, Business Bay, Dubai, UAE"></div>
+      <div class="field"><label>Email</label><input id="coEmail" type="email" placeholder="accounts@harbordesk.com"></div>
+      <div class="field"><label>Logo</label><input type="file" id="coLogoFile" accept="image/*"></div>
+    </div>
+    <div id="logoPreview" style="margin:10px 0;"></div>
+    <div class="btn-row"><button class="btn btn-primary" id="saveCompanyBtn">Save Company Profile</button></div>
+  </div>
+
+  <div class="panel">
+    <h2>Financial Year</h2>
+    <p class="sub">All document numbers (Job, Invoice, Bill, Voucher) use this 2-digit year — e.g. "26" gives EXP-00001/26. Change it at year-end rollover.</p>
+    <div class="field" style="max-width:200px;"><label>Current Financial Year</label><input id="fy" maxlength="2" placeholder="26"></div>
+    <div class="btn-row"><button class="btn btn-primary" id="saveFyBtn">Save Financial Year</button></div>
+  </div>
+
+  <div class="panel">
+    <h2>Email (SMTP) Configuration</h2>
+    <p class="sub">Used to send invoices directly to clients from the Invoice page. Common providers: Gmail (smtp.gmail.com, port 587), Outlook (smtp.office365.com, port 587).</p>
+    <div class="grid3">
+      <div class="field"><label>SMTP Host</label><input id="smtpHost" placeholder="smtp.gmail.com"></div>
+      <div class="field"><label>Port</label><input id="smtpPort" placeholder="587"></div>
+      <div class="field"><label>Use SSL/TLS (secure)</label><select id="smtpSecure"><option value="false">No (STARTTLS, port 587)</option><option value="true">Yes (SSL, port 465)</option></select></div>
+      <div class="field"><label>SMTP Username</label><input id="smtpUser" placeholder="you@yourcompany.com"></div>
+      <div class="field"><label>SMTP Password</label><input id="smtpPass" type="password" placeholder="•••••• (leave blank to keep current)"></div>
+      <div class="field"><label>From Address</label><input id="smtpFrom" placeholder="Defaults to username if blank"></div>
+    </div>
+    <p class="sub" id="passStatus"></p>
+    <div class="btn-row"><button class="btn btn-primary" id="saveSmtpBtn">Save SMTP Settings</button></div>
+  </div>
+</div>
+<script src="/js/api.js"></script>
+<script>
+let logoDataUrl = "";
+async function load() {
+  const s = await api("GET", "/api/settings");
+  document.getElementById("coName").value = s.company_name || "";
+  document.getElementById("coPhone").value = s.company_phone || "";
+  document.getElementById("coAddress").value = s.company_address || "";
+  document.getElementById("coEmail").value = s.company_email || "";
+  logoDataUrl = s.company_logo || "";
+  document.getElementById("logoPreview").innerHTML = logoDataUrl ? `<img src="${logoDataUrl}" style="max-height:60px;border:1px solid var(--line);border-radius:6px;padding:4px;">` : `<span class="sub">No logo uploaded yet.</span>`;
+  document.getElementById("fy").value = s.financial_year;
+  document.getElementById("smtpHost").value = s.smtp_host;
+  document.getElementById("smtpPort").value = s.smtp_port;
+  document.getElementById("smtpSecure").value = s.smtp_secure;
+  document.getElementById("smtpUser").value = s.smtp_user;
+  document.getElementById("smtpFrom").value = s.smtp_from;
+  document.getElementById("passStatus").textContent = s.smtp_pass_set ? "A password is currently saved." : "No password saved yet.";
+}
+document.getElementById("coLogoFile").onchange = (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    // Downscale to a reasonable logo size (max 300px tall) so the stored data URL stays small,
+    // regardless of how large the original photo/logo file was.
+    const img = new Image();
+    img.onload = () => {
+      const maxH = 300;
+      const scale = Math.min(1, maxH / img.height);
+      const canvas = document.createElement("canvas");
+      canvas.width = img.width * scale;
+      canvas.height = img.height * scale;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      logoDataUrl = canvas.toDataURL("image/png");
+      document.getElementById("logoPreview").innerHTML = `<img src="${logoDataUrl}" style="max-height:60px;border:1px solid var(--line);border-radius:6px;padding:4px;">`;
+    };
+    img.src = reader.result;
+  };
+  reader.readAsDataURL(file);
+};
+document.getElementById("saveCompanyBtn").onclick = async () => {
+  try {
+    await api("PUT", "/api/settings", {
+      company_name: document.getElementById("coName").value.trim(),
+      company_phone: document.getElementById("coPhone").value.trim(),
+      company_address: document.getElementById("coAddress").value.trim(),
+      company_email: document.getElementById("coEmail").value.trim(),
+      company_logo: logoDataUrl,
+    });
+    toast("Company profile saved", "success");
+  } catch(e){ toast(e.message, "error"); }
+};
+document.getElementById("saveFyBtn").onclick = async () => {
+  const fy = document.getElementById("fy").value.trim();
+  if (!/^\d{2}$/.test(fy)) return toast("Enter a 2-digit year, e.g. 26", "error");
+  await api("PUT", "/api/settings", { financial_year: fy });
+  toast("Financial year saved", "success");
+};
+document.getElementById("saveSmtpBtn").onclick = async () => {
+  await api("PUT", "/api/settings", {
+    smtp_host: document.getElementById("smtpHost").value.trim(),
+    smtp_port: document.getElementById("smtpPort").value.trim(),
+    smtp_secure: document.getElementById("smtpSecure").value === "true",
+    smtp_user: document.getElementById("smtpUser").value.trim(),
+    smtp_pass: document.getElementById("smtpPass").value,
+    smtp_from: document.getElementById("smtpFrom").value.trim(),
+  });
+  document.getElementById("smtpPass").value = "";
+  toast("SMTP settings saved", "success");
+  load();
+};
+(async function init() { await renderTopNav("admin/settings.html"); load(); })();
+</script>
+</body>
+</html>

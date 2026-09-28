@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Trial Balance — Harbor Desk</title><link rel="stylesheet" href="/css/style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+</head>
+<body>
+<div class="topnav" id="topnav"></div>
+<div class="wrap">
+  <div class="panel">
+    <div style="display:flex;justify-content:space-between;flex-wrap:wrap;align-items:flex-end;gap:12px;">
+      <div><h2>Trial Balance</h2><p class="sub">Opening balance, movement for the period, and closing balance — per account.</p></div>
+      <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;">
+        <div class="field"><label>From</label><input type="date" id="fromDate"></div>
+        <div class="field"><label>To</label><input type="date" id="toDate"></div>
+        <button class="btn btn-sm" id="loadBtn">Refresh</button>
+        <button class="btn btn-sm" id="exportBtn">⬇ Export to Excel</button>
+        <button class="btn btn-sm" onclick="window.print()">🖨 Print</button>
+      </div>
+    </div>
+    <table>
+      <thead><tr><th>Code</th><th>Name</th>
+        <th class="num">Opening Debit</th><th class="num">Opening Credit</th>
+        <th class="num">Debit</th><th class="num">Credit</th>
+        <th class="num">Closing Debit</th><th class="num">Closing Credit</th></tr></thead>
+      <tbody id="rows"></tbody>
+      <tfoot><tr style="font-weight:700;background:#F7F8F9;">
+        <td colspan="2">Total</td>
+        <td class="num mono" id="totOpDr"></td><td class="num mono" id="totOpCr"></td>
+        <td class="num mono" id="totDr"></td><td class="num mono" id="totCr"></td>
+        <td class="num mono" id="totClDr"></td><td class="num mono" id="totClCr"></td>
+      </tr></tfoot>
+    </table>
+  </div>
+</div>
+<script src="/js/api.js"></script>
+<script>
+renderTopNav("accounting/trialbalance.html");
+let lastData = null;
+
+function firstOfThisMonth() {
+  const d = new Date(); d.setDate(1);
+  return d.toISOString().slice(0,10);
+}
+function today() { return new Date().toISOString().slice(0,10); }
+
+async function load() {
+  const from = document.getElementById("fromDate").value;
+  const to = document.getElementById("toDate").value;
+  const data = await api("GET", `/api/trial-balance/period?from=${from}&to=${to}`);
+  lastData = data;
+  document.getElementById("rows").innerHTML = data.rows.map(r => `
+    <tr><td class="mono">${r.code}</td><td>${r.name}</td>
+      <td class="num mono">${r.openingDebit?fmt(r.openingDebit):""}</td><td class="num mono">${r.openingCredit?fmt(r.openingCredit):""}</td>
+      <td class="num mono">${r.debit?fmt(r.debit):""}</td><td class="num mono">${r.credit?fmt(r.credit):""}</td>
+      <td class="num mono">${r.closingDebit?fmt(r.closingDebit):""}</td><td class="num mono">${r.closingCredit?fmt(r.closingCredit):""}</td>
+    </tr>`).join("") || `<tr><td colspan="8"><div class="empty">No activity for this period.</div></td></tr>`;
+  document.getElementById("totOpDr").textContent = fmt(data.totals.openingDebit);
+  document.getElementById("totOpCr").textContent = fmt(data.totals.openingCredit);
+  document.getElementById("totDr").textContent = fmt(data.totals.debit);
+  document.getElementById("totCr").textContent = fmt(data.totals.credit);
+  document.getElementById("totClDr").textContent = fmt(data.totals.closingDebit);
+  document.getElementById("totClCr").textContent = fmt(data.totals.closingCredit);
+}
+document.getElementById("loadBtn").onclick = load;
+document.getElementById("exportBtn").onclick = () => {
+  if (!lastData) return;
+  const data = lastData.rows.map(r => ({
+    Code: r.code, Name: r.name, Type: r.type,
+    "Opening Debit": r.openingDebit, "Opening Credit": r.openingCredit,
+    Debit: r.debit, Credit: r.credit,
+    "Closing Debit": r.closingDebit, "Closing Credit": r.closingCredit,
+  }));
+  data.push({ Code: "", Name: "Total", "Opening Debit": lastData.totals.openingDebit, "Opening Credit": lastData.totals.openingCredit,
+    Debit: lastData.totals.debit, Credit: lastData.totals.credit, "Closing Debit": lastData.totals.closingDebit, "Closing Credit": lastData.totals.closingCredit });
+  const ws = XLSX.utils.json_to_sheet(data);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Trial Balance");
+  XLSX.writeFile(wb, `trial-balance-${lastData.from}-to-${lastData.to}.xlsx`);
+};
+(async function init() {
+  document.getElementById("fromDate").value = firstOfThisMonth();
+  document.getElementById("toDate").value = today();
+  await load();
+})();
+</script>
+</body>
+</html>

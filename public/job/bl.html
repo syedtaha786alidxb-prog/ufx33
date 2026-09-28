@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>B/L &amp; Containers — Harbor Desk</title><link rel="stylesheet" href="/css/style.css"></head>
+<body>
+<div class="topnav" id="topnav"></div>
+<div class="wrap">
+  <div class="panel">
+    <h2>B/L Info — Job <span id="jobNoLabel" class="mono"></span></h2>
+    <div id="jobSearchBox"></div>
+
+    <h3 style="font-size:13.5px;margin-top:0;">From Booking <span class="sub" style="font-weight:400;">(read-only — edit these on Booking Info)</span></h3>
+    <div class="grid3">
+      <div class="field"><label>Port of Loading</label><input id="bkPol" class="mono" readonly disabled></div>
+      <div class="field"><label>Port of Discharge</label><input id="bkPod" class="mono" readonly disabled></div>
+      <div class="field"><label>Vessel / Voyage</label><input id="bkVesselVoyage" class="mono" readonly disabled></div>
+      <div class="field"><label>Freight Type</label><input id="bkFreightType" class="mono" readonly disabled></div>
+    </div>
+
+    <h3 style="font-size:13.5px;">B/L Detail</h3>
+    <div class="grid3">
+      <div class="field"><label>HBL #</label><input id="hbl" class="mono"></div>
+      <div class="field"><label>MBL #</label><input id="mbl" class="mono"></div>
+      <div class="field"><label>Release Status</label><select id="releaseStatus"><option>Original</option><option>Telex</option><option>Seaway</option></select></div>
+      <div class="field"><label>Place Of Receipt</label><input id="placeOfReceipt"></div>
+      <div class="field"><label>Place Of Delivery</label><input id="placeOfDelivery"></div>
+      <div class="field"><label>Weight Unit</label><select id="weightUnit"><option>KGS</option><option>LBS</option></select></div>
+      <div class="field"><label>No. Of Original B/L's</label><input id="noOfOriginals" placeholder="e.g. 3 (THREE)"></div>
+      <div class="field"><label>Agent Stamp</label><input id="agentStamp"></div>
+      <div class="field"><label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="hideFreightType" style="width:auto;"> Hide Freight Type on B/L</label></div>
+      <div class="field" style="grid-column:span 3;"><label>Delivery Agent</label><textarea id="deliveryAgent" rows="2"></textarea></div>
+      <div class="field" style="grid-column:span 3;"><label>Marks &amp; Numbers</label><textarea id="marksNumbers" rows="2" placeholder="Shipping marks as they'll appear on the B/L"></textarea></div>
+      <div class="field"><label>No. Of Packages / Shipping Units</label><input id="noOfPackages"></div>
+      <div class="field" style="grid-column:span 2;"><label>Description Of Goods &amp; Packages</label><textarea id="goodsDescription" rows="2"></textarea></div>
+    </div>
+    <div class="btn-row"><button class="btn btn-primary" id="saveBlBtn">Save B/L</button></div>
+  </div>
+
+  <div class="panel">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;">
+      <div><h2>Container Info</h2><p class="sub">Only sizes/types added in Equipment are selectable here. Container # must be 11 characters — 4 letters + 7 digits (e.g. MSKU1234567) — and cannot repeat.</p></div>
+      <button class="btn btn-sm" id="addRowBtn">+ Add Row</button>
+    </div>
+    <div id="perSizeSummary" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;"></div>
+    <table>
+      <thead><tr><th></th><th>Container #</th><th>Seal #</th><th>Size/Type</th><th class="num">Gross Wt (kg)</th><th class="num">Net Wt (kg)</th><th class="num">Measurement (CBM)</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+
+    <div class="panel" style="background:#FAFBFC;margin-top:14px;margin-bottom:0;">
+      <h2 style="font-size:13.5px;">Bulk Add Containers</h2>
+      <p class="sub">Paste rows from Excel — one per line: Container No, Size/Type, Gross Weight (tab or comma separated). Size/Type must match one from Equipment.</p>
+      <textarea id="bulkText" rows="5" style="font-family:ui-monospace,monospace;"></textarea>
+      <div class="btn-row"><button class="btn btn-sm btn-primary" id="applyBulkBtn">Add Parsed Rows</button></div>
+    </div>
+
+    <div class="btn-row">
+      <a href="/job/booking.html?open=1" class="btn" style="text-decoration:none;">← Back</a>
+      <a href="/job/invoice.html" class="btn btn-orange" id="continueBtn" style="text-decoration:none;">Continue to Invoice →</a>
+    </div>
+  </div>
+</div>
+<script src="/js/api.js"></script>
+<script>
+renderTopNav("job/bl.html");
+let jobId = getCurrentJobId();
+let equipmentSizes = []; // [{size, qty}]
+
+function sizeOptions(sel) {
+  return equipmentSizes.map(e => `<option value="${e.size}" ${e.size===sel?"selected":""}>${e.size}</option>`).join("");
+}
+
+async function load() {
+  const job = await api("GET", `/api/jobs/${jobId}`);
+  document.getElementById("jobNoLabel").textContent = job.job_no;
+  const bl = await api("GET", `/api/jobs/${jobId}/bl`);
+  document.getElementById("hbl").value = bl.hbl || job.job_no;
+  document.getElementById("mbl").value = bl.mbl || "";
+  document.getElementById("releaseStatus").value = bl.release_status || "Original";
+  document.getElementById("placeOfReceipt").value = bl.place_of_receipt || "";
+  document.getElementById("placeOfDelivery").value = bl.place_of_delivery || "";
+  document.getElementById("weightUnit").value = bl.weight_unit || "KGS";
+  document.getElementById("hideFreightType").checked = !!bl.hide_freight_type;
+  document.getElementById("deliveryAgent").value = bl.delivery_agent || "";
+  document.getElementById("noOfOriginals").value = bl.no_of_originals || "";
+  document.getElementById("agentStamp").value = bl.agent_stamp || "";
+  document.getElementById("marksNumbers").value = bl.marks_and_numbers || "";
+  document.getElementById("noOfPackages").value = bl.no_of_packages || "";
+  document.getElementById("goodsDescription").value = bl.goods_description || job.commodity || "";
+
+  // These come straight from Booking — shown read-only here so B/L always matches the booking.
+  document.getElementById("bkPol").value = job.pol || "—";
+  document.getElementById("bkPod").value = job.pod || "—";
+  document.getElementById("bkVesselVoyage").value = [job.vessel_name, job.voyage_no].filter(Boolean).join(" / ") || "—";
+  document.getElementById("bkFreightType").value = job.freight_type || "—";
+
+  const equipment = await api("GET", `/api/jobs/${jobId}/equipment`);
+  const sizeMap = {};
+  equipment.forEach(e => { if (e.qty > 0) sizeMap[e.size] = (sizeMap[e.size]||0) + e.qty; });
+  equipmentSizes = Object.entries(sizeMap).map(([size,qty]) => ({ size, qty }));
+
+  const containers = await api("GET", `/api/jobs/${jobId}/containers`);
+
+  const addedBySize = {};
+  containers.forEach(c => { addedBySize[c.size] = (addedBySize[c.size]||0) + 1; });
+  document.getElementById("perSizeSummary").innerHTML = equipmentSizes.length
+    ? equipmentSizes.map(e => {
+        const added = addedBySize[e.size] || 0;
+        const ok = added >= e.qty;
+        return `<span class="badge ${ok?'badge-settled':'badge-unsettled'}">${e.size}: ${added}/${e.qty}</span>`;
+      }).join("")
+    : `<span class="badge badge-unsettled">No equipment sizes set yet — go back to Equipment first.</span>`;
+
+  document.getElementById("rows").innerHTML = containers.map(c => `
+    <tr data-id="${c.id}">
+      <td><button class="btn btn-sm" onclick="delRow(${c.id})">✕</button></td>
+      <td><input class="mono" value="${c.no}" onchange="updateRow(${c.id},'no',this.value)"></td>
+      <td><input class="mono" value="${c.seal||''}" onchange="updateRow(${c.id},'seal',this.value)"></td>
+      <td><select onchange="updateRow(${c.id},'size',this.value)">${sizeOptions(c.size)}</select></td>
+      <td><input type="number" class="num" value="${c.weight}" onchange="updateRow(${c.id},'weight',this.value)"></td>
+      <td><input type="number" class="num" value="${c.net_weight||0}" onchange="updateRow(${c.id},'net_weight',this.value)"></td>
+      <td><input type="number" step="0.001" class="num" value="${c.measurement||0}" onchange="updateRow(${c.id},'measurement',this.value)"></td>
+    </tr>`).join("") || `<tr><td colspan="7"><div class="empty">No containers yet.</div></td></tr>`;
+}
+window.updateRow = async (id, field, value) => {
+  const row = [...document.querySelectorAll(`tr[data-id="${id}"]`)][0];
+  const inputs = row.querySelectorAll("input");
+  const payload = { no: inputs[0].value, seal: inputs[1].value, size: row.querySelector("select").value, weight: Number(inputs[2].value), net_weight: Number(inputs[3].value), measurement: Number(inputs[4].value) };
+  payload[field] = (field === "weight" || field === "net_weight" || field === "measurement") ? Number(value) : value;
+  try {
+    await api("PUT", `/api/containers/${id}`, payload);
+    load();
+  } catch (e) { toast(e.message, "error"); load(); }
+};
+document.getElementById("saveBlBtn").onclick = async () => {
+  await api("PUT", `/api/jobs/${jobId}/bl`, {
+    hbl: document.getElementById("hbl").value,
+    mbl: document.getElementById("mbl").value,
+    release_status: document.getElementById("releaseStatus").value,
+    handover_type: "By Hand",
+    place_of_receipt: document.getElementById("placeOfReceipt").value,
+    place_of_delivery: document.getElementById("placeOfDelivery").value,
+    weight_unit: document.getElementById("weightUnit").value,
+    hide_freight_type: document.getElementById("hideFreightType").checked,
+    delivery_agent: document.getElementById("deliveryAgent").value,
+    no_of_originals: document.getElementById("noOfOriginals").value,
+    agent_stamp: document.getElementById("agentStamp").value,
+    marks_and_numbers: document.getElementById("marksNumbers").value,
+    no_of_packages: document.getElementById("noOfPackages").value,
+    goods_description: document.getElementById("goodsDescription").value,
+  });
+  toast("B/L saved", "success");
+  load();
+};
+document.getElementById("addRowBtn").onclick = async () => {
+  if (!equipmentSizes.length) return toast("Add container sizes/quantities in Equipment first", "error");
+  try {
+    await api("POST", `/api/jobs/${jobId}/containers`, { no: "", seal: "", size: equipmentSizes[0].size, weight: 0 });
+    load();
+  } catch (e) { toast(e.message, "error"); }
+};
+window.delRow = async (id) => { await api("DELETE", `/api/containers/${id}`); load(); };
+document.getElementById("applyBulkBtn").onclick = async () => {
+  if (!equipmentSizes.length) return toast("Add container sizes/quantities in Equipment first", "error");
+  const validSizes = equipmentSizes.map(e=>e.size);
+  const text = document.getElementById("bulkText").value;
+  const rows = [];
+  const sizeRejected = [];
+  text.split("\n").map(l=>l.trim()).filter(Boolean).forEach(line=>{
+    const p = line.split(/\t|,/).map(x=>x.trim()).filter(Boolean);
+    const size = (p[1]||"").toUpperCase();
+    if (!validSizes.includes(size)) { sizeRejected.push(line); return; }
+    rows.push({ no: (p[0]||"").toUpperCase(), size, weight: Number(p[2])||0 });
+  });
+  if (!rows.length) return toast("No valid rows — sizes must match Equipment (" + validSizes.join(", ") + ")", "error");
+  try {
+    const result = await api("POST", `/api/jobs/${jobId}/containers/bulk`, { rows });
+    document.getElementById("bulkText").value = "";
+    let msg = `${result.added} container(s) added`;
+    const totalRejected = sizeRejected.length + result.rejected.length;
+    if (totalRejected) msg += `, ${totalRejected} skipped (bad format, duplicate, or size not in Equipment)`;
+    toast(msg, result.added ? "success" : "error");
+    load();
+  } catch (e) { toast(e.message, "error"); }
+};
+renderJobSearchBox("jobSearchBox", () => location.reload());
+load();
+</script>
+</body>
+</html>

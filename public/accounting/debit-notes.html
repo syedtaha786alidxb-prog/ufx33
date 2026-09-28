@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Debit Notes — Harbor Desk</title><link rel="stylesheet" href="/css/style.css"></head>
+<body>
+<div class="topnav" id="topnav"></div>
+<div class="wrap">
+  <div class="panel">
+    <h2>New Debit Note</h2>
+    <p class="sub">Adjusts a vendor's payable — picking a bill adjusts that bill directly; leave it blank for a general adjustment.</p>
+    <div class="grid">
+      <div class="field"><label>Vendor *</label><input id="dnVendor" oninput="onDnVendorChange()"></div>
+      <div class="field"><label>Bill <span class="sub" style="font-weight:400;">(optional)</span></label><select id="dnBill"><option value="">— No specific bill —</option></select></div>
+      <div class="field"><label>Date</label><input type="date" id="dnDate"></div>
+      <div class="field"><label>Amount *</label><input type="number" id="dnAmount" min="0" step="0.01"></div>
+      <div class="field"><label>Reduces Account *</label><select id="dnAccount"></select></div>
+      <div class="field" style="grid-column:span 2;"><label>Reason</label><input id="dnReason" placeholder="e.g. Damaged goods claim, overbilling correction"></div>
+    </div>
+    <div class="btn-row"><button class="btn btn-violet" id="dnSaveBtn">Save Debit Note</button></div>
+  </div>
+
+  <div class="panel">
+    <div style="display:flex;justify-content:space-between;flex-wrap:wrap;align-items:flex-end;">
+      <h2>Debit Notes</h2>
+      <button class="btn btn-sm" onclick="window.print()">🖨 Print</button>
+    </div>
+    <table><thead><tr><th>DN #</th><th>Vendor</th><th>Bill</th><th>Date</th><th class="num">Amount</th><th>Reason</th><th></th></tr></thead>
+      <tbody id="rows"></tbody></table>
+  </div>
+</div>
+<div id="modalRoot"></div>
+<script src="/js/api.js"></script>
+<script>
+renderTopNav("accounting/debit-notes.html");
+let parties = [], bills = [], accounts = [], allNotes = [];
+
+async function onDnVendorChange() {
+  const name = document.getElementById("dnVendor").value.trim();
+  const vendorBills = bills.filter(b => b.vendor.toLowerCase() === name.toLowerCase() && !b.settled);
+  document.getElementById("dnBill").innerHTML = `<option value="">— No specific bill —</option>` +
+    vendorBills.map(b => `<option value="${b.id}">${b.bill_no} — outstanding ${fmt(b.amount-b.settled_amount)}</option>`).join("");
+}
+document.getElementById("dnSaveBtn").onclick = async () => {
+  const vendor = document.getElementById("dnVendor").value.trim();
+  const amount = Number(document.getElementById("dnAmount").value);
+  if (!vendor || !amount) return toast("Enter vendor and amount", "error");
+  try {
+    const note = await api("POST", "/api/debit-notes", {
+      vendor, bill_id: document.getElementById("dnBill").value || null,
+      date: document.getElementById("dnDate").value, amount,
+      account_code: document.getElementById("dnAccount").value,
+      reason: document.getElementById("dnReason").value.trim(),
+    });
+    toast("Debit note saved", "success");
+    document.getElementById("dnAmount").value = ""; document.getElementById("dnReason").value = "";
+    await load();
+    printNote(note.id);
+  } catch(e){ toast(e.message, "error"); }
+};
+async function load() {
+  allNotes = await api("GET", "/api/debit-notes");
+  document.getElementById("rows").innerHTML = allNotes.map(n => `
+    <tr><td class="mono">${n.dn_no}</td><td>${esc(n.vendor)}</td><td class="mono">${n.bill_no||"—"}</td><td>${n.date}</td>
+      <td class="num mono">${fmt(n.amount)}</td><td>${esc(n.reason)||"—"}</td>
+      <td style="display:flex;gap:4px;">
+        <button class="btn btn-sm" onclick="editNote(${n.id})">Edit</button>
+        <button class="btn btn-sm" onclick="printNote(${n.id})">🖨</button>
+        <button class="btn btn-sm" onclick="deleteNote(${n.id})">✕</button>
+      </td></tr>`).join("") || `<tr><td colspan="7"><div class="empty">No debit notes yet.</div></td></tr>`;
+}
+window.editNote = (id) => {
+  const n = allNotes.find(n => n.id === id);
+  const root = document.getElementById("modalRoot");
+  root.innerHTML = `
+    <div class="modal-backdrop">
+      <div class="modal">
+        <h3>Edit Debit Note ${n.dn_no}</h3>
+        <p class="sub">Amount and account are fixed once posted — delete and re-issue if those need to change.</p>
+        <div class="field" style="margin-bottom:12px;"><label>Date</label><input type="date" id="ednDate" value="${n.date}"></div>
+        <div class="field" style="margin-bottom:16px;"><label>Reason</label><input id="ednReason" value="${esc(n.reason)}"></div>
+        <div class="btn-row" style="margin-top:0;"><button class="btn" id="ednCancel">Cancel</button><button class="btn btn-violet" id="ednSave">Save</button></div>
+      </div>
+    </div>`;
+  document.getElementById("ednCancel").onclick = () => { root.innerHTML = ""; };
+  document.getElementById("ednSave").onclick = async () => {
+    try {
+      await api("PUT", `/api/debit-notes/${id}`, { date: document.getElementById("ednDate").value, reason: document.getElementById("ednReason").value.trim() });
+      toast("Debit note updated", "success");
+      root.innerHTML = ""; load();
+    } catch(e){ toast(e.message, "error"); }
+  };
+};
+window.deleteNote = async (id) => {
+  const n = allNotes.find(n => n.id === id);
+  const reason = await confirmWithReason("Delete Debit Note", `This reverses ${n.dn_no}'s ledger entry${n.bill_no ? ` and restores the outstanding balance on ${n.bill_no}` : ""}.`);
+  if (!reason) return;
+  try { await api("DELETE", `/api/debit-notes/${id}`, { reason }); toast("Debit note deleted", "success"); load(); }
+  catch(e){ toast(e.message, "error"); }
+};
+window.printNote = async (id) => {
+  const n = allNotes.find(n => n.id === id);
+  const company = await getCompanyProfile();
+  const win = window.open("", "_blank");
+  win.document.write(`
+    <html><head><title>Debit Note ${n.dn_no}</title>
+    <style>body{font-family:Arial,sans-serif;color:#1C2A36;padding:36px;max-width:640px;margin:0 auto;}
+    table{width:100%;border-collapse:collapse;margin-top:16px;font-size:13px;}
+    td{padding:8px 0;border-bottom:1px solid #E5E9EC;} td:first-child{color:#5B6B78;width:160px;}
+    .total{font-size:16px;font-weight:700;margin-top:16px;}</style></head>
+    <body>
+      ${letterheadHtml(company, "Debit Note", n.dn_no)}
+      <table>
+        <tr><td>Vendor</td><td>${esc(n.vendor)}</td></tr>
+        <tr><td>Date</td><td>${n.date}</td></tr>
+        <tr><td>Against Bill</td><td>${n.bill_no||"— General adjustment —"}</td></tr>
+        <tr><td>Reason</td><td>${esc(n.reason)||"—"}</td></tr>
+      </table>
+      <div class="total">Amount: ${fmt(n.amount)}</div>
+      <div style="margin-top:60px;font-size:12px;">Authorized By: ____________________</div>
+      ${letterheadFooterHtml(company)}
+    </body></html>`);
+  win.document.close(); win.focus();
+  setTimeout(() => win.print(), 300);
+};
+(async function init() {
+  parties = await api("GET", "/api/parties");
+  bills = await api("GET", "/api/payables");
+  accounts = await api("GET", "/api/accounts");
+  document.getElementById("dnAccount").innerHTML = accounts.filter(a=>a.type==="Expense"||a.type==="Asset").map(a=>`<option value="${a.code}">${a.code} — ${a.name}</option>`).join("");
+  document.getElementById("dnDate").value = new Date().toISOString().slice(0,10);
+  attachAutocomplete(document.getElementById("dnVendor"), () => parties.filter(p=>p.is_vendor).map(p => ({ label: p.name, sub: p.code||"" })), onDnVendorChange);
+  await load();
+})();
+</script>
+</body>
+</html>

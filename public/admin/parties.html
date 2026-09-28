@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Customers &amp; Vendors — Harbor Desk</title><link rel="stylesheet" href="/css/style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  .modal-backdrop{position:fixed;inset:0;background:rgba(11,29,46,.55);display:flex;align-items:center;justify-content:center;z-index:60;padding:20px;overflow-y:auto;}
+  .modal{background:#fff;border-radius:10px;padding:24px 26px;max-width:420px;width:100%;margin:auto;}
+  .modal h3{margin:0 0 4px 0;font-size:16px;}
+  .modal p.sub{margin:0 0 18px 0;}
+  .checkbox-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
+  .checkbox-row{display:flex;align-items:center;gap:8px;padding:6px 0;}
+  .checkbox-row input[type=checkbox]{width:auto;}
+  .checkbox-row label{font-size:13px;color:var(--text);font-weight:500;cursor:pointer;}
+  .role-badge{font-size:10px;font-weight:700;padding:2px 6px;border-radius:5px;margin-right:4px;text-transform:uppercase;}
+  .role-client{background:#E5EEF7;color:#1E5A8C;}
+  .role-shipper{background:#E7F5EE;color:#1F8A5F;}
+  .role-consignee{background:#EFE9F7;color:#6B4FA0;}
+  .role-vendor{background:#FDF2E3;color:#9A5B00;}
+</style>
+</head>
+<body>
+<div class="topnav" id="topnav"></div>
+<div class="wrap">
+  <div class="panel">
+    <div style="display:flex;justify-content:space-between;flex-wrap:wrap;">
+      <div><h2>Customers &amp; Vendors</h2><p class="sub">Tag each party with the roles it plays — this controls which dropdown it shows up in.</p></div>
+      <button class="btn btn-sm btn-violet" id="newPartyBtn">+ New Party</button>
+    </div>
+    <table><thead><tr><th>Name</th><th>Code</th><th>Roles</th><th>Agent</th><th>TRN</th><th>Trade License</th><th>Contact</th><th>Email</th><th></th></tr></thead>
+      <tbody id="rows"></tbody></table>
+  </div>
+
+  <div class="panel">
+    <h2>Bulk Upload (Excel / CSV)</h2>
+    <p class="sub">Download the template, fill in as many rows as you like, then upload it back here. Duplicate names are skipped automatically.</p>
+    <div class="btn-row" style="margin-top:0;">
+      <button class="btn btn-sm" id="downloadTemplateBtn">⬇ Download Template</button>
+      <input type="file" id="uploadFile" accept=".xlsx,.xls,.csv" style="max-width:260px;">
+      <button class="btn btn-sm btn-primary" id="uploadBtn">Upload File</button>
+    </div>
+    <div id="uploadResult"></div>
+  </div>
+</div>
+<div id="modalRoot"></div>
+<script src="/js/api.js"></script>
+<script>
+let allowDelete = false;
+function roleBadges(p) {
+  const out = [];
+  if (p.is_client) out.push(`<span class="role-badge role-client">Client</span>`);
+  if (p.is_shipper) out.push(`<span class="role-badge role-shipper">Shipper</span>`);
+  if (p.is_consignee) out.push(`<span class="role-badge role-consignee">Consignee</span>`);
+  if (p.is_vendor) out.push(`<span class="role-badge role-vendor">Vendor</span>`);
+  return out.join("") || `<span class="sub">No roles set</span>`;
+}
+async function load() {
+  const parties = await api("GET", "/api/parties");
+  window._partiesCache = parties;
+  document.getElementById("rows").innerHTML = parties.map(p => `
+    <tr><td>${esc(p.name)}</td><td class="mono">${esc(p.code)||"—"}</td><td>${roleBadges(p)}</td><td>${esc(p.agent_name)||"—"}</td><td class="mono">${esc(p.trn)||"—"}</td><td class="mono">${esc(p.trade_license)||"—"}</td><td>${esc(p.contact)||"—"}</td><td>${esc(p.email)||"—"}</td>
+      <td style="display:flex;gap:6px;"><button class="btn btn-sm btn-teal" onclick="openEditPartyForm(${p.id})">Edit</button>
+      ${allowDelete ? `<button class="btn btn-sm" onclick="delParty(${p.id})">✕</button>` : ""}</td></tr>`).join("") || `<tr><td colspan="9"><div class="empty">No parties yet.</div></td></tr>`;
+}
+function openNewPartyForm() {
+  const root = document.getElementById("modalRoot");
+  root.innerHTML = `
+    <div class="modal-backdrop">
+      <div class="modal">
+        <h3>New Party</h3>
+        <p class="sub">One party can hold multiple roles — e.g. the same company can be both a Shipper and a Client.</p>
+        <div class="field" style="margin-bottom:12px;"><label>Name *</label><input id="npName" placeholder="Company name"></div>
+        <p class="sub" style="margin:0 0 12px 0;">Code will be auto-generated (e.g. P-0001).</p>
+        <div class="field" style="margin-bottom:16px;"><label>Contact</label><input id="npContact" placeholder="Phone / email (optional)"></div>
+        <div class="field" style="margin-bottom:16px;"><label>Email Address</label><input id="npEmail" type="email" placeholder="For sending invoices, e.g. accounts@client.com"></div>
+        <div class="field" style="margin-bottom:16px;"><label>Agent <span class="sub" style="font-weight:400;">(optional — shown on the client receipt screen)</span></label><input id="npAgent" placeholder="e.g. Overseas agent name"></div>
+        <div class="grid">
+          <div class="field" style="margin-bottom:16px;"><label>Customer TRN <span class="sub" style="font-weight:400;">(must be unique)</span></label><input id="npTrn" placeholder="e.g. 100234567800003"></div>
+          <div class="field" style="margin-bottom:16px;"><label>Trade License # <span class="sub" style="font-weight:400;">(must be unique)</span></label><input id="npTradeLicense" placeholder="e.g. CN-1234567"></div>
+        </div>
+        <label style="font-size:12px;font-weight:600;color:var(--text-mute);display:block;margin-bottom:8px;">Roles (tick all that apply)</label>
+        <div class="checkbox-grid" style="margin-bottom:16px;">
+          <div class="checkbox-row"><input type="checkbox" id="rClient"><label for="rClient">Client</label></div>
+          <div class="checkbox-row"><input type="checkbox" id="rShipper"><label for="rShipper">Shipper</label></div>
+          <div class="checkbox-row"><input type="checkbox" id="rConsignee"><label for="rConsignee">Consignee</label></div>
+          <div class="checkbox-row"><input type="checkbox" id="rVendor"><label for="rVendor">Vendor</label></div>
+        </div>
+        <div class="btn-row" style="margin-top:0;"><button class="btn" id="cancelNewParty">Cancel</button><button class="btn btn-violet" id="saveNewParty">Add Party</button></div>
+      </div>
+    </div>`;
+  document.getElementById("cancelNewParty").onclick = () => { root.innerHTML = ""; };
+  document.getElementById("saveNewParty").onclick = async () => {
+    const name = document.getElementById("npName").value.trim();
+    if (!name) return toast("Enter a party name", "error");
+    const payload = {
+      name, contact: document.getElementById("npContact").value.trim(),
+      email: document.getElementById("npEmail").value.trim(),
+      agent_name: document.getElementById("npAgent").value.trim(),
+      trn: document.getElementById("npTrn").value.trim(),
+      trade_license: document.getElementById("npTradeLicense").value.trim(),
+      is_client: document.getElementById("rClient").checked,
+      is_shipper: document.getElementById("rShipper").checked,
+      is_consignee: document.getElementById("rConsignee").checked,
+      is_vendor: document.getElementById("rVendor").checked,
+    };
+    if (!payload.is_client && !payload.is_shipper && !payload.is_consignee && !payload.is_vendor) {
+      return toast("Tick at least one role", "error");
+    }
+    try { const p = await api("POST", "/api/parties", payload); toast(`Party added — code ${p.code}`,"success"); root.innerHTML=""; load(); }
+    catch(e){ toast(e.message, "error"); }
+  };
+}
+document.getElementById("newPartyBtn").onclick = openNewPartyForm;
+
+function openEditPartyForm(id) {
+  const p = (window._partiesCache||[]).find(p => p.id === id);
+  if (!p) return;
+  const root = document.getElementById("modalRoot");
+  root.innerHTML = `
+    <div class="modal-backdrop">
+      <div class="modal">
+        <h3>Edit Party</h3>
+        <p class="sub">Update roles, contact details, or the agent shown on the client receipt screen.</p>
+        <div class="field" style="margin-bottom:12px;"><label>Name *</label><input id="epName" value="${esc(p.name)}"></div>
+        <div class="field" style="margin-bottom:16px;"><label>Contact</label><input id="epContact" value="${esc(p.contact)}"></div>
+        <div class="field" style="margin-bottom:16px;"><label>Email Address</label><input id="epEmail" type="email" value="${esc(p.email)}"></div>
+        <div class="field" style="margin-bottom:16px;"><label>Agent</label><input id="epAgent" value="${esc(p.agent_name)}"></div>
+        <div class="grid">
+          <div class="field" style="margin-bottom:16px;"><label>Customer TRN</label><input id="epTrn" value="${esc(p.trn)}"></div>
+          <div class="field" style="margin-bottom:16px;"><label>Trade License #</label><input id="epTradeLicense" value="${esc(p.trade_license)}"></div>
+        </div>
+        <label style="font-size:12px;font-weight:600;color:var(--text-mute);display:block;margin-bottom:8px;">Roles</label>
+        <div class="checkbox-grid" style="margin-bottom:16px;">
+          <div class="checkbox-row"><input type="checkbox" id="epClient" ${p.is_client?"checked":""}><label for="epClient">Client</label></div>
+          <div class="checkbox-row"><input type="checkbox" id="epShipper" ${p.is_shipper?"checked":""}><label for="epShipper">Shipper</label></div>
+          <div class="checkbox-row"><input type="checkbox" id="epConsignee" ${p.is_consignee?"checked":""}><label for="epConsignee">Consignee</label></div>
+          <div class="checkbox-row"><input type="checkbox" id="epVendor" ${p.is_vendor?"checked":""}><label for="epVendor">Vendor</label></div>
+        </div>
+        <div class="btn-row" style="margin-top:0;"><button class="btn" id="cancelEditParty">Cancel</button><button class="btn btn-teal" id="saveEditParty">Save Changes</button></div>
+      </div>
+    </div>`;
+  document.getElementById("cancelEditParty").onclick = () => { root.innerHTML = ""; };
+  document.getElementById("saveEditParty").onclick = async () => {
+    const payload = {
+      name: document.getElementById("epName").value.trim(),
+      contact: document.getElementById("epContact").value.trim(),
+      email: document.getElementById("epEmail").value.trim(),
+      agent_name: document.getElementById("epAgent").value.trim(),
+      trn: document.getElementById("epTrn").value.trim(),
+      trade_license: document.getElementById("epTradeLicense").value.trim(),
+      is_client: document.getElementById("epClient").checked,
+      is_shipper: document.getElementById("epShipper").checked,
+      is_consignee: document.getElementById("epConsignee").checked,
+      is_vendor: document.getElementById("epVendor").checked,
+    };
+    try { await api("PUT", `/api/parties/${id}`, payload); toast("Party updated", "success"); root.innerHTML=""; load(); }
+    catch(e){ toast(e.message, "error"); }
+  };
+}
+window.openEditPartyForm = openEditPartyForm;
+window.delParty = async (id) => {
+  if (!confirm("Delete this party?")) return;
+  try { await api("DELETE", `/api/parties/${id}`); toast("Deleted","success"); load(); }
+  catch(e){ toast(e.message, "error"); }
+};
+
+document.getElementById("downloadTemplateBtn").onclick = () => {
+  const headers = ["Name","Contact","Email","Client","Vendor","Shipper","Consignee"];
+  const sample = [
+    ["Acme Trading LLC","+971-4-1234567","accounts@acmetrading.com","Yes","No","Yes","No"],
+    ["Wan Hai Lines","+971-4-7654321","ops@wanhai.com","No","Yes","No","No"],
+  ];
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...sample]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Parties");
+  XLSX.writeFile(wb, "customers_vendors_template.xlsx");
+};
+
+document.getElementById("uploadBtn").onclick = async () => {
+  const file = document.getElementById("uploadFile").files[0];
+  if (!file) return toast("Choose a file first", "error");
+  const buf = await file.arrayBuffer();
+  const wb = XLSX.read(buf, { type: "array" });
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const json = XLSX.utils.sheet_to_json(ws, { defval: "" });
+
+  const rows = json.map(r => {
+    const get = (...keys) => { for (const k of keys) { const found = Object.keys(r).find(kk => kk.toLowerCase().trim() === k); if (found) return r[found]; } return ""; };
+    return {
+      name: get("name"), contact: get("contact","phone"), email: get("email"),
+      is_client: get("client"), is_vendor: get("vendor"), is_shipper: get("shipper"), is_consignee: get("consignee"),
+    };
+  }).filter(r => r.name);
+
+  if (!rows.length) return toast("No valid rows found in the file", "error");
+  try {
+    const result = await api("POST", "/api/parties/bulk", { rows });
+    document.getElementById("uploadResult").innerHTML = `<div class="empty" style="border-style:solid;">Created ${result.created}, skipped ${result.skipped} duplicate(s).${result.errors.length ? "<br>"+result.errors.join("<br>") : ""}</div>`;
+    toast("Bulk upload complete", "success");
+    load();
+  } catch(e){ toast(e.message, "error"); }
+};
+
+(async function init() {
+  const me = await renderTopNav("admin/parties.html");
+  allowDelete = canDelete(me);
+  load();
+})();
+</script>
+</body>
+</html>

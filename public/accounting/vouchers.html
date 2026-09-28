@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Journal Vouchers — Harbor Desk</title><link rel="stylesheet" href="/css/style.css"></head>
+<body>
+<div class="topnav" id="topnav"></div>
+<div class="wrap">
+  <div class="panel">
+    <h2 id="formTitle">New Voucher</h2>
+    <p class="sub">Pick which type of voucher you're creating — each type keeps its own serial number series.</p>
+    <div class="grid" style="margin-bottom:12px;">
+      <div class="field"><label>Voucher Type</label>
+        <select id="voucherType" onchange="onVoucherTypeChange()"></select>
+      </div>
+      <div class="field"><label>Date</label><input type="date" id="jvDate"></div>
+      <div class="field" style="grid-column:span 2;"><label>Narration</label><input id="jvNarration" placeholder="What is this entry for?"></div>
+    </div>
+    <div id="lines"></div>
+    <div class="btn-row" style="margin-top:4px;"><button class="btn btn-sm" id="addLineBtn">+ Add Line</button></div>
+    <div class="btn-row" style="background:#F7F8F9;padding:12px 16px;border-radius:8px;border:1px solid var(--line);">
+      <div>Debit: <b class="mono" id="drTotal">0.00</b></div>
+      <div>Credit: <b class="mono" id="crTotal">0.00</b></div>
+      <div id="balanceStatus"></div>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-teal" id="postBtn">Post Voucher</button>
+      <button class="btn" id="cancelEditBtn" style="display:none;">Cancel Edit</button>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div style="display:flex;justify-content:space-between;flex-wrap:wrap;align-items:flex-start;">
+      <h2>Voucher History</h2>
+      <input id="historySearch" placeholder="🔎 Search voucher #, narration, or type..." style="max-width:280px;">
+      <button class="btn btn-sm" onclick="window.print()">🖨 Print</button>
+    </div>
+    <table><thead><tr><th>Voucher</th><th>Type</th><th>Date</th><th>Narration</th><th>Source</th><th class="num">Amount</th><th></th></tr></thead>
+      <tbody id="history"></tbody></table>
+  </div>
+</div>
+<script src="/js/api.js"></script>
+<script>
+renderTopNav("accounting/vouchers.html");
+let accounts = [];
+let voucherTypes = [];
+let allVouchers = [];
+let lines = [{account:"1010",debit:0,credit:0},{account:"4000",debit:0,credit:0}];
+let editingId = null; // voucher.id while editing an existing manual voucher, else null
+
+// Suggests sensible default account pairs when the voucher type changes — Cash types default to the
+// cash account, Bank types to a bank account, plain JV leaves whatever's already picked.
+function onVoucherTypeChange() {
+  const type = document.getElementById("voucherType").value;
+  const cashAcct = accounts.find(a=>/cash/i.test(a.name))?.code || accounts[0]?.code;
+  const bankAcct = accounts.find(a=>/bank/i.test(a.name) && !/cash/i.test(a.name))?.code || accounts[0]?.code;
+  if (type === "CPV") lines = [{account: accounts.find(a=>a.type==="Expense")?.code || accounts[0]?.code, debit:0, credit:0}, {account: cashAcct, debit:0, credit:0}];
+  else if (type === "CRV") lines = [{account: cashAcct, debit:0, credit:0}, {account: accounts.find(a=>a.type==="Income")?.code || accounts[0]?.code, debit:0, credit:0}];
+  else if (type === "BPV") lines = [{account: accounts.find(a=>a.type==="Expense")?.code || accounts[0]?.code, debit:0, credit:0}, {account: bankAcct, debit:0, credit:0}];
+  else if (type === "BRV") lines = [{account: bankAcct, debit:0, credit:0}, {account: accounts.find(a=>a.type==="Income")?.code || accounts[0]?.code, debit:0, credit:0}];
+  renderLines();
+}
+function accountOptions(sel) {
+  return accounts.map(a=>`<option value="${a.code}" ${a.code===sel?"selected":""}>${a.code} — ${a.name}</option>`).join("");
+}
+function renderLines() {
+  document.getElementById("lines").innerHTML = lines.map((l,i)=>`
+    <div style="display:grid;grid-template-columns:2fr 1fr 1fr 32px;gap:8px;margin-bottom:8px;">
+      <select onchange="lines[${i}].account=this.value">${accountOptions(l.account)}</select>
+      <input type="number" class="num" value="${l.debit}" onchange="lines[${i}].debit=Number(this.value);renderTotals()">
+      <input type="number" class="num" value="${l.credit}" onchange="lines[${i}].credit=Number(this.value);renderTotals()">
+      <button class="btn btn-sm" onclick="lines.splice(${i},1);renderLines();renderTotals()">✕</button>
+    </div>`).join("");
+  renderTotals();
+}
+function renderTotals() {
+  const dr = lines.reduce((s,l)=>s+Number(l.debit||0),0);
+  const cr = lines.reduce((s,l)=>s+Number(l.credit||0),0);
+  document.getElementById("drTotal").textContent = fmt(dr);
+  document.getElementById("crTotal").textContent = fmt(cr);
+  const balanced = Math.abs(dr-cr) < 0.005 && dr>0;
+  document.getElementById("balanceStatus").innerHTML = `<b style="color:${balanced?'#1F8A5F':'#C1442D'}">${balanced?'Balanced':'Not Balanced'}</b>`;
+  document.getElementById("postBtn").disabled = !balanced;
+}
+document.getElementById("addLineBtn").onclick = () => { lines.push({account:accounts[0]?.code,debit:0,credit:0}); renderLines(); };
+document.getElementById("postBtn").onclick = async () => {
+  const narration = document.getElementById("jvNarration").value;
+  const voucher_type = document.getElementById("voucherType").value;
+  if (!narration) return toast("Add a narration", "error");
+  try {
+    if (editingId) {
+      await api("PUT", `/api/vouchers/${editingId}`, { date: document.getElementById("jvDate").value, narration, lines });
+      toast("Voucher updated", "success");
+      cancelEdit();
+    } else {
+      await api("POST", "/api/vouchers", { date: document.getElementById("jvDate").value, narration, lines, voucher_type });
+      toast("Voucher posted", "success");
+      document.getElementById("jvNarration").value = "";
+      onVoucherTypeChange();
+    }
+    loadHistory();
+  } catch(e){ toast(e.message, "error"); }
+};
+function cancelEdit() {
+  editingId = null;
+  document.getElementById("formTitle").textContent = "New Voucher";
+  document.getElementById("postBtn").textContent = "Post Voucher";
+  document.getElementById("cancelEditBtn").style.display = "none";
+  document.getElementById("voucherType").disabled = false;
+  document.getElementById("jvNarration").value = "";
+  onVoucherTypeChange();
+}
+document.getElementById("cancelEditBtn").onclick = cancelEdit;
+window.editVoucher = (id) => {
+  const v = allVouchers.find(v => v.id === id);
+  if (!v) return;
+  if (v.source !== "manual") return toast("Only manually-created vouchers can be edited — this one was posted automatically by an invoice/receipt/bill/payment.", "error");
+  editingId = v.id;
+  document.getElementById("formTitle").textContent = `Editing Voucher ${v.no}`;
+  document.getElementById("postBtn").textContent = "Update Voucher";
+  document.getElementById("cancelEditBtn").style.display = "inline-block";
+  document.getElementById("voucherType").disabled = true; // type/serial is fixed once posted
+  document.getElementById("jvDate").value = v.date;
+  document.getElementById("jvNarration").value = v.narration;
+  lines = v.lines.map(l => ({ account: l.account_code, debit: l.debit, credit: l.credit }));
+  renderLines();
+  window.scrollTo({ top: 0, behavior: "smooth" });
+};
+async function loadHistory() {
+  allVouchers = await api("GET", "/api/vouchers");
+  renderHistory(allVouchers);
+}
+function renderHistory(list) {
+  document.getElementById("history").innerHTML = list.map(v => {
+    const typeCode = (v.no||"").split("-")[0];
+    const typeLabel = (voucherTypes.find(t=>t.code===typeCode)||{}).label || v.source;
+    return `<tr><td class="mono">${v.no}</td><td>${typeLabel}</td><td>${v.date}</td><td>${esc(v.narration)}</td><td>${v.source}</td>
+      <td class="num mono">${fmt(v.lines.reduce((s,l)=>s+Number(l.debit||0),0))}</td>
+      <td>${v.source === "manual" ? `<button class="btn btn-sm" onclick="editVoucher(${v.id})">Edit</button>` : ""} <button class="btn btn-sm" onclick="printVoucher(${v.id})">🖨 Print</button></td></tr>`;
+  }).join("") || `<tr><td colspan="7"><div class="empty">No vouchers yet.</div></td></tr>`;
+}
+window.printVoucher = async (id) => {
+  const v = allVouchers.find(v => v.id === id) || await api("GET", `/api/vouchers/${id}`);
+  const accountName = (code) => (accounts.find(a=>a.code===code)||{}).name || code;
+  const typeCode = (v.no||"").split("-")[0];
+  const typeLabel = (voucherTypes.find(t=>t.code===typeCode)||{}).label || v.source;
+  const dr = v.lines.reduce((s,l)=>s+Number(l.debit||0),0);
+  const company = await getCompanyProfile();
+  const win = window.open("", "_blank");
+  win.document.write(`
+    <html><head><title>Voucher ${v.no}</title>
+    <style>
+      body{font-family:Arial,sans-serif;color:#1C2A36;padding:36px;max-width:720px;margin:0 auto;}
+      table{width:100%;border-collapse:collapse;margin-top:16px;font-size:13px;}
+      th{background:#F0F2F4;text-align:left;padding:8px;} td{padding:8px;border-bottom:1px solid #E5E9EC;}
+      .num{text-align:right;font-variant-numeric:tabular-nums;}
+      .total-row td{font-weight:700;border-top:2px solid #1C2A36;border-bottom:none;}
+    </style></head>
+    <body>
+      ${letterheadHtml(company, typeLabel, "Voucher # " + v.no)}
+      <div style="text-align:right;font-size:13px;margin-bottom:6px;"><div>Date: <b>${v.date}</b></div>${v.payment_mode?`<div>Mode: <b>${v.payment_mode}</b>${v.reference_no?` (${v.reference_no})`:''}</div>`:''}</div>
+      <p><b>Narration:</b> ${esc(v.narration)||"—"}</p>
+      <table><thead><tr><th>Account</th><th class="num">Debit</th><th class="num">Credit</th></tr></thead>
+        <tbody>${v.lines.map(l=>`<tr><td>${l.account_code} — ${accountName(l.account_code)}</td><td class="num">${l.debit?fmt(l.debit):''}</td><td class="num">${l.credit?fmt(l.credit):''}</td></tr>`).join("")}
+        <tr class="total-row"><td>Total</td><td class="num">${fmt(dr)}</td><td class="num">${fmt(dr)}</td></tr></tbody>
+      </table>
+      <div style="margin-top:60px;display:flex;justify-content:space-between;font-size:12px;">
+        <div>Prepared By: ____________________</div>
+        <div>Approved By: ____________________</div>
+      </div>
+      ${letterheadFooterHtml(company)}
+    </body></html>`);
+  win.document.close();
+  win.focus();
+  setTimeout(() => win.print(), 300);
+};
+document.getElementById("historySearch").addEventListener("input", (e) => {
+  const q = e.target.value.trim().toLowerCase();
+  if (!q) return renderHistory(allVouchers);
+  renderHistory(allVouchers.filter(v =>
+    v.no.toLowerCase().includes(q) || (v.narration||"").toLowerCase().includes(q) || (v.source||"").toLowerCase().includes(q)
+  ));
+});
+(async function init(){
+  accounts = await api("GET", "/api/accounts");
+  voucherTypes = await api("GET", "/api/voucher-types");
+  document.getElementById("voucherType").innerHTML = voucherTypes.map(t=>`<option value="${t.code}">${t.code} — ${t.label}</option>`).join("");
+  document.getElementById("jvDate").value = new Date().toISOString().slice(0,10);
+  onVoucherTypeChange();
+  loadHistory();
+})();
+</script>
+</body>
+</html>

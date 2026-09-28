@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><title>Login — Harbor Desk</title>
+<link rel="stylesheet" href="/css/style.css">
+<style>
+  body{display:flex;align-items:center;justify-content:center;min-height:100vh;background:var(--ink);}
+  .login-box{background:#fff;border-radius:12px;padding:36px 34px;max-width:380px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,.3);}
+  .login-box h1{font-size:20px;margin:0 0 4px 0;text-align:center;}
+  .login-box p.sub{text-align:center;margin-bottom:24px;}
+  .login-box .field{margin-bottom:14px;}
+  .login-box .btn{width:100%;padding:11px;font-size:14px;}
+  .login-error{background:var(--red-bg);color:var(--red);padding:9px 12px;border-radius:7px;font-size:12.5px;margin-bottom:14px;display:none;}
+</style>
+</head>
+<body>
+  <div class="login-box">
+    <h1 id="loginBrand">🚢 Harbor Desk</h1>
+    <p class="sub">Sign in to continue</p>
+    <div class="login-error" id="loginError"></div>
+    <div class="field"><label>Username</label><input id="username" autofocus></div>
+    <div class="field"><label>Password</label><input id="password" type="password"></div>
+    <button class="btn btn-primary" id="loginBtn">Sign In</button>
+  </div>
+<script>
+fetch("/api/company-profile").then(r => r.json()).then(c => {
+  if (c && c.name) {
+    const esc = (s) => String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+    document.getElementById("loginBrand").innerHTML = c.logo
+      ? `<img src="${c.logo}" style="max-height:44px;max-width:220px;display:block;margin:0 auto 6px;">`
+      : `🚢 ${esc(c.name)}`;
+  }
+}).catch(() => {});
+async function doLogin() {
+  const username = document.getElementById("username").value;
+  const password = document.getElementById("password").value;
+  const errBox = document.getElementById("loginError");
+  errBox.style.display = "none";
+  try {
+    const res = await fetch("/api/login", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Login failed");
+    window.location.href = data.user && data.user.chatbot_only ? "/chatbot.html" : "/dashboard.html";
+  } catch (e) {
+    errBox.textContent = e.message;
+    errBox.style.display = "block";
+  }
+}
+document.getElementById("loginBtn").onclick = doLogin;
+document.getElementById("password").addEventListener("keydown", (e) => { if (e.key === "Enter") doLogin(); });
+</script>
+</body>
+</html>

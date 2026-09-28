@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Opening Balances — Harbor Desk</title><link rel="stylesheet" href="/css/style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+</head>
+<body>
+<div class="topnav" id="topnav"></div>
+<div class="wrap">
+  <div class="panel">
+    <h2>Opening Balances — One-Time Migration</h2>
+    <p class="sub">Bring in your old system's financial data once, as of a cut-off date. Both uploads below post to the ledger automatically, so everything shows up in its normal place — Chart of Accounts, Ledger, Trial Balance, Receivables, and Job List.</p>
+    <div class="field" style="max-width:220px;"><label>Opening Balance Date</label><input type="date" id="obDate"></div>
+  </div>
+
+  <div class="panel">
+    <h2>1. Chart of Accounts — Wise (Trial Balance Upload)</h2>
+    <p class="sub">Every account code in the sheet must already exist in the Chart of Accounts. If your sheet's debits and credits don't balance on their own, the difference is posted to "Opening Balance Equity" automatically.</p>
+    <div class="btn-row" style="margin-top:0;">
+      <button class="btn btn-sm" id="downloadAcctTemplateBtn">⬇ Download Template</button>
+      <input type="file" id="acctUploadFile" accept=".xlsx,.xls,.csv" style="max-width:260px;">
+      <button class="btn btn-sm btn-primary" id="acctUploadBtn">Upload Trial Balance</button>
+    </div>
+    <div id="acctUploadResult"></div>
+  </div>
+
+  <div class="panel">
+    <h2>2. Customer — Wise (Outstanding Balances)</h2>
+    <p class="sub">One row per client with what they owed as of the cut-off date. Each row creates a legacy "Opening Balance" job + invoice for that client — so it appears normally under Receivables and the Client Receipt screen. New client names are created automatically.</p>
+    <div class="btn-row" style="margin-top:0;">
+      <button class="btn btn-sm" id="downloadCustTemplateBtn">⬇ Download Template</button>
+      <input type="file" id="custUploadFile" accept=".xlsx,.xls,.csv" style="max-width:260px;">
+      <button class="btn btn-sm btn-violet" id="custUploadBtn">Upload Customer Balances</button>
+    </div>
+    <div id="custUploadResult"></div>
+  </div>
+</div>
+<script src="/js/api.js"></script>
+<script>
+document.getElementById("downloadAcctTemplateBtn").onclick = () => {
+  const headers = ["Account Code","Account Name (for reference only)","Debit","Credit"];
+  const sample = [["1000","Accounts Receivable — Trade","82652.54",""],["2000","Accounts Payable — Vendors","","72531.08"]];
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...sample]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Opening Balances");
+  XLSX.writeFile(wb, "opening_balances_accounts_template.xlsx");
+};
+document.getElementById("downloadCustTemplateBtn").onclick = () => {
+  const headers = ["Client Name","Opening Balance (Dr = they owe you, Cr = enter negative)"];
+  const sample = [["Acme Trading LLC","15320.00"],["Wan Hai Lines","-500.00"]];
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...sample]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Customer Opening Balances");
+  XLSX.writeFile(wb, "opening_balances_customers_template.xlsx");
+};
+
+function readSheet(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const wb = XLSX.read(new Uint8Array(e.target.result), { type: "array" });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        resolve(XLSX.utils.sheet_to_json(ws, { defval: "" }));
+      } catch (err) { reject(err); }
+    };
+    reader.onerror = reject;
+    reader.readAsArrayBuffer(file);
+  });
+}
+function getField(row, ...keys) {
+  const found = Object.keys(row).find(k => keys.includes(k.toLowerCase().trim()));
+  return found ? row[found] : "";
+}
+
+document.getElementById("acctUploadBtn").onclick = async () => {
+  const file = document.getElementById("acctUploadFile").files[0];
+  if (!file) return toast("Choose a file first", "error");
+  const json = await readSheet(file);
+  const rows = json.map(r => ({
+    code: String(getField(r, "account code", "code")).trim(),
+    debit: Number(getField(r, "debit")) || 0,
+    credit: Number(getField(r, "credit")) || 0,
+  })).filter(r => r.code);
+  if (!rows.length) return toast("No valid rows found", "error");
+  try {
+    const result = await api("POST", "/api/opening-balances/accounts", { rows, date: document.getElementById("obDate").value });
+    document.getElementById("acctUploadResult").innerHTML = `<div class="empty" style="border-style:solid;">Voucher ${result.voucher.no} posted with ${result.lines_posted} line(s).</div>`;
+    toast("Chart-of-accounts opening balances uploaded", "success");
+  } catch(e){ toast(e.message, "error"); }
+};
+
+document.getElementById("custUploadBtn").onclick = async () => {
+  const file = document.getElementById("custUploadFile").files[0];
+  if (!file) return toast("Choose a file first", "error");
+  const json = await readSheet(file);
+  const rows = json.map(r => ({
+    client: String(getField(r, "client name", "client")).trim(),
+    amount: Number(getField(r, "opening balance (dr = they owe you, cr = enter negative)", "opening balance", "amount")) || 0,
+  })).filter(r => r.client);
+  if (!rows.length) return toast("No valid rows found", "error");
+  try {
+    const result = await api("POST", "/api/opening-balances/customers", { rows, date: document.getElementById("obDate").value });
+    document.getElementById("custUploadResult").innerHTML = `<div class="empty" style="border-style:solid;">${result.created} client opening balance(s) created.${result.errors && result.errors.length ? "<br>"+result.errors.join("<br>") : ""}</div>`;
+    toast("Customer opening balances uploaded", "success");
+  } catch(e){ toast(e.message, "error"); }
+};
+
+(async function init() {
+  await renderTopNav("admin/opening-balances.html");
+  try { const s = await api("GET", "/api/settings"); document.getElementById("obDate").value = s.opening_balance_date; } catch(e) {}
+})();
+</script>
+</body>
+</html>

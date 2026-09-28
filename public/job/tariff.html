@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Tariff — Harbor Desk</title><link rel="stylesheet" href="/css/style.css"></head>
+<body>
+<div class="topnav" id="topnav"></div>
+<div class="wrap">
+
+  <div class="panel" id="listView">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;">
+      <div><h2>Tariff</h2><p class="sub">Fixed rate cards per container size/type — once Approved, use the "Apply Tariff" button in Booking's Charges &amp; Payable/Cost sections to bring these rates in.</p></div>
+      <div class="btn-row" style="margin:0;">
+        <button class="btn btn-sm btn-primary" id="newExportTariffBtn">+ Export Tariff</button>
+        <button class="btn btn-sm btn-orange" id="newImportTariffBtn">+ Import Tariff</button>
+      </div>
+    </div>
+    <table>
+      <thead><tr><th>Code</th><th>Type</th><th>Date Applicable</th><th class="num">Charges</th><th class="num">Cost Lines</th><th>Status</th><th></th></tr></thead>
+      <tbody id="tariffRows"></tbody>
+    </table>
+  </div>
+
+  <div class="panel" id="formView" style="display:none;">
+    <div class="btn-row" style="justify-content:flex-start;flex-wrap:wrap;">
+      <span id="tariffBadge" class="badge" style="font-size:13px;"></span>
+      <button class="btn btn-sm" id="backToListBtn">← Back to List</button>
+      <button class="btn btn-sm btn-primary" id="saveTariffBtn">Save</button>
+      <button class="btn btn-sm btn-primary" id="approveTariffBtn">Approve Tariff</button>
+      <button class="btn btn-sm" id="unapproveTariffBtn" style="display:none;">Un-approve Tariff</button>
+    </div>
+    <div class="grid3">
+      <div class="field"><label>Tariff Code</label><input id="tCode" class="mono" readonly disabled></div>
+      <div class="field"><label>Type</label><input id="tType" readonly disabled></div>
+      <div class="field"><label>Date Applicable</label><input type="date" id="tEffectiveDate"></div>
+      <div class="field" style="grid-column:span 3;"><label>Name / Notes</label><input id="tName" placeholder="e.g. General rate card 2026"></div>
+    </div>
+
+    <h2 style="margin-top:22px;">Charges</h2>
+    <p class="sub">Revenue rate per container Size/Type. Leave Client blank to apply to all clients, or pick one to restrict this rate to just that client.</p>
+    <table>
+      <thead><tr><th></th><th>Charge</th><th>Size/Type</th><th class="num">Rate</th><th>Ccy</th><th>Client (optional)</th></tr></thead>
+      <tbody id="tChargeRows"></tbody>
+    </table>
+    <div class="btn-row" style="margin-top:0;"><button class="btn btn-sm" id="addTChargeBtn">+ Add Charge</button></div>
+
+    <h2 style="margin-top:22px;">Cost</h2>
+    <p class="sub">Fixed cost rate per container Size/Type for one specific vendor — this is the vendor's own rate.</p>
+    <table>
+      <thead><tr><th></th><th>Description</th><th>Size/Type</th><th class="num">Rate</th><th>Ccy</th><th>Vendor *</th></tr></thead>
+      <tbody id="tCostRows"></tbody>
+    </table>
+    <div class="btn-row" style="margin-top:0;"><button class="btn btn-sm btn-violet" id="addTCostBtn">+ Add Cost Line</button></div>
+  </div>
+
+</div>
+<div id="modalRoot"></div>
+<script src="/js/api.js"></script>
+<script>
+const SIZE_TYPES = ["20SD","20RF","20OT","20GO","20TK","20FR","20BK","40SD","40HC","40RF","40FR","40OT"];
+let chargeCodes = [];
+let allParties = [];
+let tariff = null;
+
+function sizeOptions(sel) { return SIZE_TYPES.map(s => `<option ${s===sel?"selected":""}>${s}</option>`).join(""); }
+function chargeOptions(sel) { return chargeCodes.map(cc => `<option value="${cc.code}" ${cc.code===sel?"selected":""}>${cc.code} — ${cc.name}</option>`).join(""); }
+
+async function loadRecentTariffs() {
+  const rows = await api("GET", "/api/tariffs");
+  document.getElementById("tariffRows").innerHTML = rows.map(t => `
+    <tr><td class="mono">${esc(t.code)}</td><td>${esc(t.type)}</td><td>${t.effective_date||"—"}</td>
+      <td class="num mono">${t.charge_count}</td><td class="num mono">${t.cost_count}</td>
+      <td><span class="badge ${t.approved?'badge-settled':'badge-unsettled'}">${t.approved?'Approved':'Draft'}</span></td>
+      <td><button class="btn btn-sm btn-orange" onclick="openTariffById(${t.id})">Open</button></td></tr>`).join("")
+    || `<tr><td colspan="7"><div class="empty">No tariffs created yet.</div></td></tr>`;
+}
+function showListView() {
+  document.getElementById("listView").style.display = "block";
+  document.getElementById("formView").style.display = "none";
+  loadRecentTariffs();
+}
+function showFormView() {
+  document.getElementById("listView").style.display = "none";
+  document.getElementById("formView").style.display = "block";
+}
+window.openTariffById = async (id) => {
+  try { tariff = await api("GET", `/api/tariffs/${id}`); showFormView(); fillForm(); }
+  catch (e) { toast(e.message, "error"); }
+};
+async function createTariff(type) {
+  try {
+    tariff = await api("POST", "/api/tariffs", { type });
+    showFormView();
+    fillForm();
+    toast(`${type} Tariff ${tariff.code} created — add Charge/Cost lines below`, "success");
+  } catch (e) { toast(e.message, "error"); }
+}
+document.getElementById("newExportTariffBtn").onclick = () => createTariff("Export");
+document.getElementById("newImportTariffBtn").onclick = () => createTariff("Import");
+document.getElementById("backToListBtn").onclick = () => showListView();
+
+function fillForm() {
+  document.getElementById("tCode").value = tariff.code;
+  document.getElementById("tType").value = tariff.type;
+  document.getElementById("tEffectiveDate").value = tariff.effective_date || "";
+  document.getElementById("tName").value = tariff.name || "";
+  document.getElementById("tariffBadge").textContent = `${tariff.code} — ${tariff.type} Tariff`;
+
+  const approved = !!tariff.approved;
+  ["tEffectiveDate","tName","saveTariffBtn","addTChargeBtn","addTCostBtn"].forEach(id => {
+    document.getElementById(id).disabled = approved;
+  });
+  document.getElementById("approveTariffBtn").style.display = approved ? "none" : "inline-block";
+  document.getElementById("unapproveTariffBtn").style.display = approved ? "inline-block" : "none";
+
+  document.getElementById("tChargeRows").innerHTML = (tariff.charges || []).map(r => `
+    <tr data-id="${r.id}">
+      <td><button class="btn btn-sm" onclick="delTCharge(${r.id})" ${approved?"disabled":""}>✕</button></td>
+      <td><select class="fCode" onchange="updateTCharge(${r.id})" ${approved?"disabled":""}>${chargeOptions(r.code)}</select></td>
+      <td><select class="fSize" onchange="updateTCharge(${r.id})" ${approved?"disabled":""}>${sizeOptions(r.size)}</select></td>
+      <td><input type="number" min="0" step="0.01" class="num fRate" value="${r.rate}" onchange="updateTCharge(${r.id})" ${approved?"disabled":""}></td>
+      <td><select class="fCcy" onchange="updateTCharge(${r.id})" ${approved?"disabled":""}><option ${r.currency==="AED"?"selected":""}>AED</option><option ${r.currency==="USD"?"selected":""}>USD</option><option ${r.currency==="EUR"?"selected":""}>EUR</option><option ${r.currency==="GBP"?"selected":""}>GBP</option><option ${r.currency==="INR"?"selected":""}>INR</option></select></td>
+      <td><div style="display:flex;gap:6px;">
+        <input class="mono fClientCode" placeholder="Code" style="max-width:80px;" value="${esc(r.client_code||'')}" ${approved?"disabled":""}>
+        <input class="fClientName" placeholder="— All Clients —" style="flex:1;" value="${esc(r.client_name||'')}" ${approved?"disabled":""}>
+      </div></td>
+    </tr>`).join("") || `<tr><td colspan="6"><div class="empty">No charge rates yet.</div></td></tr>`;
+
+  document.getElementById("tCostRows").innerHTML = (tariff.costs || []).map(r => `
+    <tr data-id="${r.id}">
+      <td><button class="btn btn-sm" onclick="delTCost(${r.id})" ${approved?"disabled":""}>✕</button></td>
+      <td><input class="fDesc" value="${esc(r.description)}" onchange="updateTCost(${r.id})" ${approved?"disabled":""}></td>
+      <td><select class="fSize" onchange="updateTCost(${r.id})" ${approved?"disabled":""}>${sizeOptions(r.size)}</select></td>
+      <td><input type="number" min="0" step="0.01" class="num fRate" value="${r.rate}" onchange="updateTCost(${r.id})" ${approved?"disabled":""}></td>
+      <td><select class="fCcy" onchange="updateTCost(${r.id})" ${approved?"disabled":""}><option ${r.currency==="AED"?"selected":""}>AED</option><option ${r.currency==="USD"?"selected":""}>USD</option><option ${r.currency==="EUR"?"selected":""}>EUR</option><option ${r.currency==="GBP"?"selected":""}>GBP</option><option ${r.currency==="INR"?"selected":""}>INR</option></select></td>
+      <td><div style="display:flex;gap:6px;">
+        <input class="mono fVendorCode" placeholder="Code" style="max-width:80px;" value="${esc(r.vendor_code||'')}" ${approved?"disabled":""}>
+        <input class="fVendorName" placeholder="Vendor name *" style="flex:1;" value="${esc(r.vendor_name||'')}" ${approved?"disabled":""}>
+      </div></td>
+    </tr>`).join("") || `<tr><td colspan="6"><div class="empty">No cost rates yet.</div></td></tr>`;
+
+  wireAutocompletes();
+}
+function wireAutocompletes() {
+  document.querySelectorAll("#tChargeRows tr").forEach(row => {
+    const nameInput = row.querySelector(".fClientName");
+    const codeInput = row.querySelector(".fClientCode");
+    if (!nameInput || nameInput._acWired) return;
+    nameInput._acWired = true;
+    attachAutocomplete(nameInput, () => allParties.filter(p=>p.is_client).map(p => ({ label: p.name, sub: p.code||"" })), (item) => {
+      codeInput.value = item.sub; updateTCharge(Number(row.dataset.id));
+    });
+    codeInput.addEventListener("change", () => {
+      const p = allParties.find(p => p.is_client && (p.code||"").toLowerCase() === codeInput.value.trim().toLowerCase());
+      if (codeInput.value.trim() && !p) { toast(`No client found with code "${codeInput.value}"`, "error"); return; }
+      nameInput.value = p ? p.name : "";
+      updateTCharge(Number(row.dataset.id));
+    });
+    nameInput.addEventListener("blur", () => setTimeout(() => updateTCharge(Number(row.dataset.id)), 200));
+  });
+  document.querySelectorAll("#tCostRows tr").forEach(row => {
+    const nameInput = row.querySelector(".fVendorName");
+    const codeInput = row.querySelector(".fVendorCode");
+    if (!nameInput || nameInput._acWired) return;
+    nameInput._acWired = true;
+    attachAutocomplete(nameInput, () => allParties.filter(p=>p.is_vendor).map(p => ({ label: p.name, sub: p.code||"" })), (item) => {
+      codeInput.value = item.sub; updateTCost(Number(row.dataset.id));
+    });
+    codeInput.addEventListener("change", () => {
+      const p = allParties.find(p => p.is_vendor && (p.code||"").toLowerCase() === codeInput.value.trim().toLowerCase());
+      if (codeInput.value.trim() && !p) { toast(`No vendor found with code "${codeInput.value}"`, "error"); return; }
+      if (p) { nameInput.value = p.name; updateTCost(Number(row.dataset.id)); }
+    });
+    nameInput.addEventListener("blur", () => setTimeout(() => updateTCost(Number(row.dataset.id)), 200));
+  });
+}
+function partyIdByName(name, flag) {
+  if (!name) return null;
+  const p = allParties.find(p => p[flag] && p.name.toLowerCase() === name.trim().toLowerCase());
+  return p ? p.id : null;
+}
+window.updateTCharge = async (id) => {
+  const row = document.querySelector(`#tChargeRows tr[data-id="${id}"]`);
+  const clientName = row.querySelector(".fClientName").value.trim();
+  const clientId = clientName ? partyIdByName(clientName, "is_client") : null;
+  if (clientName && !clientId) return; // not resolved yet, wait for a valid pick
+  const payload = {
+    code: row.querySelector(".fCode").value,
+    size: row.querySelector(".fSize").value,
+    rate: Number(row.querySelector(".fRate").value),
+    currency: row.querySelector(".fCcy").value,
+    client_id: clientId,
+  };
+  try { await api("PUT", `/api/tariff-charges/${id}`, payload); }
+  catch (e) { toast(e.message, "error"); }
+};
+window.delTCharge = async (id) => { await api("DELETE", `/api/tariff-charges/${id}`); openTariffById(tariff.id); };
+// Bulk add: tick several Size/Types at once and give them all ONE rate — one Charge line gets
+// created per ticked size, all sharing that same rate/currency/client scope.
+document.getElementById("addTChargeBtn").onclick = () => {
+  if (!chargeCodes.length) return toast("No charge codes set up yet — add one under Accounting → Charge Codes", "error");
+  const root = document.getElementById("modalRoot");
+  root.innerHTML = `<div class="modal-backdrop"><div class="modal" style="max-width:520px;">
+    <h3>Add Charge Rate(s)</h3>
+    <p class="sub">Tick every Size/Type this rate applies to — one Charge line is created per Size/Type, all at the same Rate.</p>
+    <div class="field"><label>Charge</label><select id="bcCode">${chargeOptions()}</select></div>
+    <div class="field"><label>Size/Type(s) *</label><div style="display:flex;flex-wrap:wrap;gap:8px;margin:6px 0;">
+      ${SIZE_TYPES.map(s => `<label style="display:flex;align-items:center;gap:4px;font-size:12.5px;"><input type="checkbox" class="bcSize" value="${s}" style="width:auto;">${s}</label>`).join("")}
+    </div></div>
+    <div class="grid3">
+      <div class="field"><label>Rate</label><input type="number" min="0" step="0.01" id="bcRate" value="0"></div>
+      <div class="field"><label>Currency</label><select id="bcCcy"><option>AED</option><option>USD</option><option>EUR</option><option>GBP</option><option>INR</option></select></div>
+      <div class="field"><label>Client (optional)</label><input id="bcClient" placeholder="— All Clients —"></div>
+    </div>
+    <div class="btn-row"><button class="btn" id="bcCancelBtn">Cancel</button><button class="btn btn-primary" id="bcAddBtn">Add</button></div>
+  </div></div>`;
+  attachAutocomplete(document.getElementById("bcClient"), () => allParties.filter(p=>p.is_client).map(p => ({ label: p.name, sub: p.code||"" })), () => {});
+  document.getElementById("bcCancelBtn").onclick = () => root.innerHTML = "";
+  document.getElementById("bcAddBtn").onclick = async () => {
+    const sizes = [...document.querySelectorAll(".bcSize:checked")].map(el => el.value);
+    if (!sizes.length) return toast("Tick at least one Size/Type", "error");
+    const clientName = document.getElementById("bcClient").value.trim();
+    const clientId = clientName ? partyIdByName(clientName, "is_client") : null;
+    if (clientName && !clientId) return toast(`No client found named "${clientName}"`, "error");
+    try {
+      const r = await api("POST", `/api/tariffs/${tariff.id}/charges/bulk`, {
+        code: document.getElementById("bcCode").value,
+        sizes, rate: Number(document.getElementById("bcRate").value),
+        currency: document.getElementById("bcCcy").value, client_id: clientId,
+      });
+      toast(`${r.added} charge rate line(s) added`, "success");
+      root.innerHTML = "";
+      openTariffById(tariff.id);
+    } catch (e) { toast(e.message, "error"); }
+  };
+};
+window.updateTCost = async (id) => {
+  const row = document.querySelector(`#tCostRows tr[data-id="${id}"]`);
+  const vendorName = row.querySelector(".fVendorName").value.trim();
+  const vendorId = partyIdByName(vendorName, "is_vendor");
+  const payload = {
+    description: row.querySelector(".fDesc").value,
+    size: row.querySelector(".fSize").value,
+    rate: Number(row.querySelector(".fRate").value),
+    currency: row.querySelector(".fCcy").value,
+    vendor_id: vendorId,
+  };
+  if (vendorName && !vendorId) return toast(`No vendor found named "${vendorName}"`, "error");
+  try { await api("PUT", `/api/tariff-costs/${id}`, payload); }
+  catch (e) { toast(e.message, "error"); }
+};
+window.delTCost = async (id) => { await api("DELETE", `/api/tariff-costs/${id}`); openTariffById(tariff.id); };
+// Same bulk pattern as Charges, but Vendor is required (a cost rate only makes sense for one vendor).
+document.getElementById("addTCostBtn").onclick = () => {
+  if (!allParties.some(p => p.is_vendor)) return toast("Add a vendor under Admin → Customers & Vendors first", "error");
+  const root = document.getElementById("modalRoot");
+  root.innerHTML = `<div class="modal-backdrop"><div class="modal" style="max-width:520px;">
+    <h3>Add Cost Rate(s)</h3>
+    <p class="sub">Tick every Size/Type this rate applies to — one Cost line is created per Size/Type, all at the same Rate.</p>
+    <div class="field"><label>Description</label><input id="bkDesc" placeholder="e.g. Trucking" value="Cost"></div>
+    <div class="field"><label>Size/Type(s) *</label><div style="display:flex;flex-wrap:wrap;gap:8px;margin:6px 0;">
+      ${SIZE_TYPES.map(s => `<label style="display:flex;align-items:center;gap:4px;font-size:12.5px;"><input type="checkbox" class="bkSize" value="${s}" style="width:auto;">${s}</label>`).join("")}
+    </div></div>
+    <div class="grid3">
+      <div class="field"><label>Rate</label><input type="number" min="0" step="0.01" id="bkRate" value="0"></div>
+      <div class="field"><label>Currency</label><select id="bkCcy"><option>AED</option><option>USD</option><option>EUR</option><option>GBP</option><option>INR</option></select></div>
+      <div class="field"><label>Vendor *</label><input id="bkVendor" placeholder="Vendor name"></div>
+    </div>
+    <div class="btn-row"><button class="btn" id="bkCancelBtn">Cancel</button><button class="btn btn-primary" id="bkAddBtn">Add</button></div>
+  </div></div>`;
+  attachAutocomplete(document.getElementById("bkVendor"), () => allParties.filter(p=>p.is_vendor).map(p => ({ label: p.name, sub: p.code||"" })), () => {});
+  document.getElementById("bkCancelBtn").onclick = () => root.innerHTML = "";
+  document.getElementById("bkAddBtn").onclick = async () => {
+    const sizes = [...document.querySelectorAll(".bkSize:checked")].map(el => el.value);
+    if (!sizes.length) return toast("Tick at least one Size/Type", "error");
+    const vendorName = document.getElementById("bkVendor").value.trim();
+    const vendorId = partyIdByName(vendorName, "is_vendor");
+    if (!vendorId) return toast(`No vendor found named "${vendorName}"`, "error");
+    try {
+      const r = await api("POST", `/api/tariffs/${tariff.id}/costs/bulk`, {
+        description: document.getElementById("bkDesc").value.trim() || "Cost",
+        sizes, rate: Number(document.getElementById("bkRate").value),
+        currency: document.getElementById("bkCcy").value, vendor_id: vendorId,
+      });
+      toast(`${r.added} cost rate line(s) added`, "success");
+      root.innerHTML = "";
+      openTariffById(tariff.id);
+    } catch (e) { toast(e.message, "error"); }
+  };
+};
+document.getElementById("saveTariffBtn").onclick = async () => {
+  try {
+    tariff = await api("PUT", `/api/tariffs/${tariff.id}`, {
+      name: document.getElementById("tName").value.trim(),
+      effective_date: document.getElementById("tEffectiveDate").value,
+    });
+    toast("Tariff saved", "success");
+    fillForm();
+  } catch (e) { toast(e.message, "error"); }
+};
+document.getElementById("approveTariffBtn").onclick = async () => {
+  try { tariff = await api("POST", `/api/tariffs/${tariff.id}/approve`); toast("Tariff approved", "success"); fillForm(); }
+  catch (e) { toast(e.message, "error"); }
+};
+document.getElementById("unapproveTariffBtn").onclick = async () => {
+  try { tariff = await api("POST", `/api/tariffs/${tariff.id}/unapprove`); toast("Tariff un-approved — you can edit it again", "success"); fillForm(); }
+  catch (e) { toast(e.message, "error"); }
+};
+
+(async function init() {
+  await renderTopNav("job/tariff.html");
+  [chargeCodes, allParties] = await Promise.all([api("GET", "/api/charge-codes"), api("GET", "/api/parties")]);
+  showListView();
+})();
+</script>
+</body>
+</html>

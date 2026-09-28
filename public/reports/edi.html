@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>EDI — Harbor Desk</title><link rel="stylesheet" href="/css/style.css">
+<style>
+  .missing-box{background:#FDF2E3;border:1px solid #F0DBB5;border-radius:8px;padding:10px 14px;margin-top:8px;font-size:12.5px;color:#7A4B00;}
+  .fill-row{display:grid;grid-template-columns:1fr 2fr auto;gap:8px;align-items:center;margin-top:6px;}
+  .job-card{border:1px solid var(--line);border-radius:9px;padding:14px 16px;margin-bottom:12px;}
+  .job-card-head{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;}
+</style>
+</head>
+<body>
+<div class="topnav" id="topnav"></div>
+<div class="wrap">
+
+  <div class="panel">
+    <h2>📤 EDI — Export &amp; Import</h2>
+    <p class="sub">Standard PEDI manifest format (as used by carriers/port systems). Pick a vessel + voyage to export, or upload a file to import.</p>
+    <div class="grid">
+      <div class="field"><label>Vessel / Voyage</label><select id="manifestSelect"><option value="">Select...</option></select></div>
+      <div class="field" style="align-self:end;"><button class="btn btn-gold" id="loadBtn">Load Manifest</button></div>
+    </div>
+  </div>
+
+  <div class="panel" id="manifestPanel" style="display:none;">
+    <h2>Manifest Details</h2>
+    <div class="grid3">
+      <div class="field"><label>Overseas Agent</label><input id="overseasAgent"></div>
+      <div class="field"><label>Reference</label><input id="reference"></div>
+      <div class="field"><label>Project Code</label><input id="projectCode"></div>
+    </div>
+    <div class="btn-row"><button class="btn btn-sm" id="saveManifestBtn">Save Manifest Info</button></div>
+  </div>
+
+  <div class="panel" id="jobsPanel" style="display:none;">
+    <h2>Jobs on this Voyage</h2>
+    <p class="sub">Anything highlighted below is required by the EDI format but missing from your forms — fill it in here before exporting.</p>
+    <div id="jobCards"></div>
+    <div class="btn-row">
+      <button class="btn btn-gold" id="exportBtn">⬇ Generate EDI Export File</button>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Import EDI File</h2>
+    <p class="sub">Upload a PEDI-format .xml file — matching jobs are updated, new ones are created (vessel, voyage, shipper, containers included).</p>
+    <input type="file" id="importFile" accept=".xml">
+    <div class="btn-row"><button class="btn btn-primary" id="importBtn">Import File</button></div>
+    <div id="importResult"></div>
+  </div>
+
+</div>
+<script src="/js/api.js"></script>
+<script>
+renderTopNav("reports/index.html");
+let currentVesselId = null, currentVoyageId = null;
+
+async function loadOptions() {
+  const options = await api("GET", "/api/edi/manifest-options");
+  document.getElementById("manifestSelect").innerHTML = `<option value="">Select...</option>` +
+    options.map(o => `<option value="${o.vessel_id}|${o.voyage_id}">${o.vessel_name} / ${o.voyage_no}</option>`).join("");
+}
+
+document.getElementById("loadBtn").onclick = async () => {
+  const val = document.getElementById("manifestSelect").value;
+  if (!val) return toast("Select a vessel/voyage first", "error");
+  const [vesselId, voyageId] = val.split("|");
+  currentVesselId = vesselId; currentVoyageId = voyageId;
+  const data = await api("GET", `/api/edi/prepare/${vesselId}/${voyageId}`);
+
+  document.getElementById("manifestPanel").style.display = "block";
+  document.getElementById("overseasAgent").value = data.manifest.overseas_agent || "";
+  document.getElementById("reference").value = data.manifest.reference || "";
+  document.getElementById("projectCode").value = data.manifest.project_code || "";
+
+  document.getElementById("jobsPanel").style.display = "block";
+  document.getElementById("jobCards").innerHTML = data.jobs.map(j => `
+    <div class="job-card" data-job="${j.id}">
+      <div class="job-card-head">
+        <b class="mono">${j.job_no}</b>
+        <span>${j.pol} → ${j.pod} · ${j.shipper||"—"}</span>
+      </div>
+      ${j.missing.length ? `
+        <div class="missing-box">
+          <b>Missing for EDI (${j.missing.length}):</b>
+          ${j.missing.map(m => `<div class="fill-row" data-field="${m.field}" data-shipper="${(j.shipper||'').replace(/"/g,'&quot;')}">
+            <span>${m.label}</span>
+            ${m.field==='shipper_party'
+              ? `<span class="sub">Will create "${j.shipper||'—'}" as a Shipper party</span><button class="btn btn-sm" onclick="createShipperParty('${(j.shipper||'').replace(/'/g,"\\'")}')">Create Party</button>`
+              : `<input placeholder="Enter value..." value="${
+                  m.field==='incoterm'?j.incoterm||'':m.field==='ld_term'?j.ld_term||'':m.field==='consignee'?j.consignee||'':m.field==='consignee_address'?j.consignee_address||'':''
+                }">
+              <button class="btn btn-sm" onclick="saveField(${j.id}, '${m.field}', this)">Save</button>`}
+          </div>`).join("")}
+        </div>` : `<div style="color:#1F8A5F;font-size:12.5px;margin-top:6px;">✓ Everything the EDI format needs is filled in.</div>`}
+    </div>`).join("") || `<div class="empty">No jobs on this vessel/voyage yet.</div>`;
+};
+
+window.saveField = async (jobId, field, btn) => {
+  const row = btn.closest(".fill-row");
+  const value = row.querySelector("input").value;
+  if (field === "shipper_code" || field === "shipper_address") {
+    const shipperName = row.dataset.shipper;
+    const parties = await api("GET", "/api/parties");
+    let party = parties.find(p => p.name.toLowerCase() === (shipperName||"").toLowerCase());
+    if (!party) { toast("Shipper party not found — create it first", "error"); return; }
+    const payload = { name: party.name, type: party.type, code: party.code, contact: party.contact, address: party.address, edi_code: party.edi_code };
+    if (field === "shipper_code") payload.edi_code = value;
+    if (field === "shipper_address") payload.address = value;
+    await api("PUT", `/api/parties/${party.id}`, payload);
+    toast("Saved", "success");
+    document.getElementById("loadBtn").onclick();
+    return;
+  }
+  await api("PUT", `/api/edi/job/${jobId}`, { [field]: value });
+  toast("Saved", "success");
+  document.getElementById("loadBtn").onclick();
+};
+window.createShipperParty = async (name) => {
+  if (!name) return toast("This job has no shipper name set yet", "error");
+  await api("POST", "/api/parties", { name, is_shipper: true, code: "", contact: "" });
+  toast("Shipper party created — fill in code & address next", "success");
+  document.getElementById("loadBtn").onclick();
+};
+
+document.getElementById("saveManifestBtn").onclick = async () => {
+  await api("PUT", `/api/edi/manifest/${currentVesselId}/${currentVoyageId}`, {
+    overseas_agent: document.getElementById("overseasAgent").value,
+    reference: document.getElementById("reference").value,
+    project_code: document.getElementById("projectCode").value,
+  });
+  toast("Manifest info saved", "success");
+};
+
+document.getElementById("exportBtn").onclick = () => {
+  if (!currentVesselId) return toast("Load a manifest first", "error");
+  window.location.href = `/api/edi/export/${currentVesselId}/${currentVoyageId}`;
+};
+
+document.getElementById("importBtn").onclick = async () => {
+  const file = document.getElementById("importFile").files[0];
+  if (!file) return toast("Choose a file first", "error");
+  const text = await file.text();
+  try {
+    const result = await api("POST", "/api/edi/import", { xml: text });
+    document.getElementById("importResult").innerHTML = `
+      <div class="missing-box" style="background:#E7F5EE;border-color:#bfe4d1;color:#1F8A5F;">
+        Imported into <b>${result.vessel} / ${result.voyage}</b> — ${result.created} job(s) created, ${result.updated} updated.
+        ${result.errors.length ? `<br><b>Warnings:</b> ${result.errors.join("; ")}` : ""}
+      </div>`;
+    toast("Import complete", "success");
+    loadOptions();
+  } catch (e) {
+    document.getElementById("importResult").innerHTML = `<div class="missing-box" style="background:#FBEAE6;border-color:#f0c4b8;color:#C1442D;">${e.message}</div>`;
+  }
+};
+
+loadOptions();
+</script>
+</body>
+</html>

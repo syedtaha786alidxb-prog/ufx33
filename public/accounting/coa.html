@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Chart of Accounts — Harbor Desk</title><link rel="stylesheet" href="/css/style.css">
+<style>
+  .modal-backdrop{position:fixed;inset:0;background:rgba(11,29,46,.55);display:flex;align-items:center;justify-content:center;z-index:60;padding:20px;overflow-y:auto;}
+  .modal{background:#fff;border-radius:10px;padding:24px 26px;max-width:420px;width:100%;margin:auto;}
+  .modal h3{margin:0 0 4px 0;font-size:16px;}
+  .used-chip{font-size:10.5px;background:#EEF1F4;color:var(--text-mute);padding:2px 6px;border-radius:5px;margin-right:4px;display:inline-block;margin-bottom:2px;}
+</style>
+</head>
+<body>
+<div class="topnav" id="topnav"></div>
+<div class="wrap">
+  <div class="panel">
+    <div style="display:flex;justify-content:space-between;flex-wrap:wrap;">
+      <div><h2>Chart of Accounts</h2><p class="sub">Balances update automatically from posted vouchers. "Used By" shows which charge codes post here.</p></div>
+      <div style="display:flex;gap:8px;"><button class="btn btn-sm" onclick="window.print()">🖨 Print</button><button class="btn btn-sm btn-teal" id="newAcctBtn">+ New Account</button></div>
+    </div>
+    <table><thead><tr><th>Code</th><th>Name</th><th>Type</th><th>Group</th><th>Linked To</th><th class="num">Dr</th><th class="num">Cr</th><th class="num">Balance</th><th>Used By</th><th></th></tr></thead>
+      <tbody id="rows"></tbody></table>
+  </div>
+
+  <div class="panel">
+    <div style="display:flex;justify-content:space-between;flex-wrap:wrap;">
+      <div><h2>Account Groups (Heads)</h2><p class="sub">Every account belongs to a group — the group decides its type and its numbering series (e.g. prefix "10" → 1001, 1002, ...).</p></div>
+      <button class="btn btn-sm" id="newGroupBtn">+ New Group</button>
+    </div>
+    <table><thead><tr><th>Prefix</th><th>Group Name</th><th>Type</th></tr></thead>
+      <tbody id="groupRows"></tbody></table>
+  </div>
+</div>
+<div id="modalRoot"></div>
+<script src="/js/api.js"></script>
+<script>
+let groups = [];
+let charges = [];
+let parties = [];
+let allAccounts = [];
+let allowDelete = false;
+async function load() {
+  allAccounts = await api("GET", "/api/accounts");
+  document.getElementById("rows").innerHTML = allAccounts.map(a => `
+    <tr><td class="mono">${a.code}</td><td>${esc(a.name)}</td><td>${a.type}</td><td>${esc(a.group_name)||"—"}</td>
+      <td>${a.linked_party_name ? `👤 ${esc(a.linked_party_name)}` : (a.linked_charge_code ? `📋 ${esc(a.linked_charge_code)}` : "—")}</td>
+      <td class="num mono">${fmt(a.balance.dr)}</td><td class="num mono">${fmt(a.balance.cr)}</td><td class="num mono">${fmt(a.balance.net)}</td>
+      <td>${(a.used_by_charges&&a.used_by_charges.length) ? a.used_by_charges.map(c=>`<span class="used-chip">${esc(c.code)}</span>`).join("") : `<span class="sub">—</span>`}</td>
+      <td style="display:flex;gap:6px;flex-wrap:wrap;">
+        <a href="/accounting/ledger.html?code=${a.code}" class="btn btn-sm" style="text-decoration:none;">Ledger</a>
+        <button class="btn btn-sm" onclick="openEditAccountModal('${a.code}')">Edit</button>
+        ${allowDelete ? `<button class="btn btn-sm" onclick="delAccount('${a.code}')">✕</button>` : ""}
+      </td></tr>`).join("");
+}
+window.delAccount = async (code) => {
+  const acct = allAccounts.find(a => a.code === code);
+  if (acct && (acct.balance.dr !== 0 || acct.balance.cr !== 0)) {
+    return toast(`This account has transactions (Dr ${fmt(acct.balance.dr)}, Cr ${fmt(acct.balance.cr)}) — balance must be zero before it can be deleted.`, "error");
+  }
+  const reason = await confirmWithReason("Delete Account", `Delete account "${code}"? Only allowed while its balance is zero.`);
+  if (!reason) return;
+  try { await api("DELETE", `/api/accounts/${code}`, { reason }); toast("Account deleted", "success"); load(); }
+  catch (e) { toast(e.message, "error"); }
+};
+window.openEditAccountModal = (code) => {
+  const a = allAccounts.find(a => a.code === code);
+  if (!a) return;
+  const root = document.getElementById("modalRoot");
+  root.innerHTML = `
+    <div class="modal-backdrop">
+      <div class="modal">
+        <h3>Edit Account <span class="mono sub">${a.code}</span></h3>
+        <p class="sub">Code and Type stay fixed once created — everything else can be changed.</p>
+        <div class="field" style="margin-bottom:12px;"><label>Account Name *</label><input id="eaName" value="${esc(a.name)}"></div>
+        <div class="field" style="margin-bottom:12px;"><label>Group</label>
+          <select id="eaGroup"><option value="">— None —</option>${groups.map(g=>`<option value="${g.id}" ${a.group_id==g.id?"selected":""}>${g.prefix} — ${esc(g.name)} (${g.type})</option>`).join("")}</select>
+        </div>
+        <div class="field" style="margin-bottom:12px;"><label>Link to Client/Vendor <span class="sub" style="font-weight:400;">(e.g. re-point this Receivable/Payable sub-account to a different party)</span></label>
+          <select id="eaParty"><option value="">— None —</option>${parties.filter(p=>p.is_client||p.is_vendor).map(p=>`<option value="${p.id}" ${a.linked_party_id==p.id?"selected":""}>${esc(p.name)}${p.is_vendor?" (Vendor)":""}</option>`).join("")}</select>
+        </div>
+        <div class="field" style="margin-bottom:18px;"><label>Link to Charge Code</label>
+          <select id="eaCharge"><option value="">— None —</option>${charges.map(c=>`<option value="${c.code}" ${a.linked_charge_code===c.code?"selected":""}>${c.code} — ${esc(c.name)}</option>`).join("")}</select>
+        </div>
+        <div class="btn-row" style="margin-top:0;"><button class="btn" id="eaCancel">Cancel</button><button class="btn btn-teal" id="eaSave">Save</button></div>
+      </div>
+    </div>`;
+  document.getElementById("eaCancel").onclick = () => { root.innerHTML = ""; };
+  document.getElementById("eaSave").onclick = async () => {
+    try {
+      await api("PUT", `/api/accounts/${a.code}`, {
+        name: document.getElementById("eaName").value.trim(),
+        group_id: document.getElementById("eaGroup").value || null,
+        linked_party_id: document.getElementById("eaParty").value || null,
+        linked_charge_code: document.getElementById("eaCharge").value || null,
+      });
+      root.innerHTML = ""; toast("Account updated", "success"); load();
+    } catch (e) { toast(e.message, "error"); }
+  };
+};
+async function loadGroups() {
+  groups = await api("GET", "/api/account-groups");
+  document.getElementById("groupRows").innerHTML = groups.map(g => `
+    <tr><td class="mono">${g.prefix}</td><td>${g.name}</td><td>${g.type}</td></tr>`).join("")
+    || `<tr><td colspan="3"><div class="empty">No groups yet.</div></td></tr>`;
+}
+function openNewGroupModal() {
+  const root = document.getElementById("modalRoot");
+  root.innerHTML = `
+    <div class="modal-backdrop">
+      <div class="modal">
+        <h3>New Account Group</h3><p class="sub">Defines a numbering series under a Chart of Accounts head.</p>
+        <div class="field" style="margin-bottom:12px;"><label>Group Name *</label><input id="ngName" placeholder="e.g. Bank & Cash"></div>
+        <div class="field" style="margin-bottom:12px;"><label>Type *</label>
+          <select id="ngType"><option>Asset</option><option>Liability</option><option>Equity</option><option>Income</option><option>Expense</option></select>
+        </div>
+        <div class="field" style="margin-bottom:18px;"><label>Numbering Prefix * <span class="sub" style="font-weight:400;">(1–3 digits, e.g. "12")</span></label><input class="mono" id="ngPrefix" placeholder="e.g. 12"></div>
+        <div class="btn-row" style="margin-top:0;"><button class="btn" id="cancelNewGroup">Cancel</button><button class="btn btn-teal" id="saveNewGroup">Add Group</button></div>
+      </div>
+    </div>`;
+  document.getElementById("cancelNewGroup").onclick = () => { root.innerHTML = ""; };
+  document.getElementById("saveNewGroup").onclick = async () => {
+    const name = document.getElementById("ngName").value.trim();
+    const type = document.getElementById("ngType").value;
+    const prefix = document.getElementById("ngPrefix").value.trim();
+    if (!name || !prefix) return toast("Enter a name and prefix", "error");
+    try { await api("POST", "/api/account-groups", { name, type, prefix }); root.innerHTML=""; toast("Group added", "success"); loadGroups(); }
+    catch(e){ toast(e.message, "error"); }
+  };
+}
+document.getElementById("newGroupBtn").onclick = openNewGroupModal;
+
+async function openNewAccountModal() {
+  const root = document.getElementById("modalRoot");
+  root.innerHTML = `
+    <div class="modal-backdrop">
+      <div class="modal">
+        <h3>New Account</h3><p class="sub">Pick a Group to auto-number the account, or type a code manually.</p>
+        <div class="field" style="margin-bottom:12px;"><label>Group</label>
+          <select id="newAcctGroup" onchange="onGroupChange()"><option value="">— Manual code/type —</option>${groups.map(g=>`<option value="${g.id}">${g.prefix} — ${g.name} (${g.type})</option>`).join("")}</select>
+        </div>
+        <div class="field" style="margin-bottom:12px;"><label>Account Code ${`<span class="sub" style="font-weight:400;">(auto-filled from group, or type your own)</span>`}</label><input class="mono" id="newAcctCode" placeholder="e.g. 4030"></div>
+        <div class="field" style="margin-bottom:12px;"><label>Account Name *</label><input id="newAcctName" placeholder="e.g. Detention & Demurrage Revenue"></div>
+        <div class="field" style="margin-bottom:12px;"><label>Type *</label>
+          <select id="newAcctType"><option>Asset</option><option>Liability</option><option>Equity</option><option>Income</option><option>Expense</option></select>
+        </div>
+        <div class="field" style="margin-bottom:12px;"><label>Link to Client/Vendor <span class="sub" style="font-weight:400;">(optional — a client's own Receivable sub-account, or a vendor/agent's own Payable sub-account)</span></label>
+          <select id="newAcctParty"><option value="">— None —</option>${parties.filter(p=>p.is_client||p.is_vendor).map(p=>`<option value="${p.id}">${esc(p.name)}${p.is_vendor?" (Vendor)":""}</option>`).join("")}</select>
+        </div>
+        <div class="field" style="margin-bottom:18px;"><label>Link to Charge Code <span class="sub" style="font-weight:400;">(optional — that charge will post here going forward)</span></label>
+          <select id="newAcctCharge"><option value="">— None —</option>${charges.map(c=>`<option value="${c.code}">${c.code} — ${c.name}</option>`).join("")}</select>
+        </div>
+        <div class="btn-row" style="margin-top:0;"><button class="btn" id="cancelNewAcct">Cancel</button><button class="btn btn-teal" id="saveNewAcct">Add Account</button></div>
+      </div>
+    </div>`;
+  document.getElementById("cancelNewAcct").onclick = () => { root.innerHTML = ""; };
+  document.getElementById("newAcctParty").onchange = () => {
+    const p = parties.find(p => String(p.id) === document.getElementById("newAcctParty").value);
+    if (p && !document.getElementById("newAcctName").value) document.getElementById("newAcctName").value = `Accounts Receivable — ${p.name}`;
+  };
+  document.getElementById("saveNewAcct").onclick = async () => {
+    const code = document.getElementById("newAcctCode").value.trim();
+    const name = document.getElementById("newAcctName").value.trim();
+    const type = document.getElementById("newAcctType").value;
+    const group_id = document.getElementById("newAcctGroup").value || null;
+    const linked_party_id = document.getElementById("newAcctParty").value || null;
+    const linked_charge_code = document.getElementById("newAcctCharge").value || null;
+    if (!name) { toast("Enter an account name", "error"); return; }
+    try {
+      await api("POST", "/api/accounts", { code: code || undefined, name, type, group_id, linked_party_id, linked_charge_code });
+      root.innerHTML=""; toast("Account added", "success"); load();
+    }
+    catch(e){ toast(e.message, "error"); }
+  };
+}
+window.onGroupChange = async () => {
+  const groupId = document.getElementById("newAcctGroup").value;
+  if (!groupId) return;
+  const group = groups.find(g => String(g.id) === groupId);
+  if (group) document.getElementById("newAcctType").value = group.type;
+  try {
+    const { code } = await api("GET", `/api/account-groups/${groupId}/next-code`);
+    document.getElementById("newAcctCode").value = code;
+  } catch(e) {}
+};
+document.getElementById("newAcctBtn").onclick = openNewAccountModal;
+(async function init() {
+  const me = await renderTopNav("accounting/coa.html");
+  allowDelete = canDelete(me);
+  [charges, parties] = await Promise.all([api("GET", "/api/charge-codes"), api("GET", "/api/parties")]);
+  await Promise.all([loadGroups(), load()]);
+})();
+</script>
+</body>
+</html>

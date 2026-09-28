@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Invoice — Harbor Desk</title><link rel="stylesheet" href="/css/style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>@media print{.topnav,.btn-row,.no-print{display:none!important;}}</style>
+</head>
+<body>
+<div class="topnav no-print" id="topnav"></div>
+<div class="wrap">
+  <div class="panel no-print">
+    <h2>Find a Client's Invoices</h2>
+    <p class="sub">Select a client to narrow the Invoices list below to just their invoices.</p>
+    <div class="ac-wrap"><input id="clientFinder" placeholder="Start typing a client name..." style="max-width:320px;"></div>
+  </div>
+
+  <div class="panel no-print">
+    <div style="display:flex;justify-content:space-between;flex-wrap:wrap;align-items:flex-start;gap:10px;">
+      <div><h2>Invoices</h2><p class="sub">Every invoice raised so far — click one to open it, or add a new one from a job's Booking data.</p></div>
+      <button class="btn btn-sm btn-violet" id="addInvoiceBtn">+ Add Invoice</button>
+    </div>
+    <div id="addInvoiceBox" style="display:none;margin-bottom:14px;"></div>
+    <div class="grid" style="margin:10px 0;">
+      <div class="field"><label>From Date</label><input type="date" id="fInvFrom"></div>
+      <div class="field"><label>To Date</label><input type="date" id="fInvTo"></div>
+      <div class="field"><label>Status</label><select id="fInvStatus"><option value="">All</option><option value="settled">Settled</option><option value="unsettled">Unsettled</option></select></div>
+    </div>
+    <div class="btn-row" style="margin:0 0 10px;">
+      <button class="btn btn-sm" id="fInvApplyBtn">Apply Filter</button>
+      <button class="btn btn-sm" id="fInvClearBtn">Clear</button>
+      <button class="btn btn-sm btn-teal" id="exportInvBtn">⭳ Export</button>
+    </div>
+    <table><thead><tr><th>Invoice #</th><th>Job #</th><th>Client</th><th>Date</th><th class="num">Amount</th><th class="num">Outstanding</th><th>Status</th><th></th></tr></thead>
+      <tbody id="allInvoicesBox"></tbody></table>
+  </div>
+
+  <div class="panel no-print">
+    <h2>Jobs Ready to Invoice</h2>
+    <p class="sub">Every job whose Charges have been approved — shows whether an invoice has already been created for it.</p>
+    <table><thead><tr><th>Job #</th><th>Client</th><th class="num">Charges Total</th><th>Status</th><th></th></tr></thead>
+      <tbody id="readyToInvoiceBox"></tbody></table>
+  </div>
+
+  <div class="panel" id="formPanel">
+    <h2>Generate Invoice — Job <span id="jobNoLabel" class="mono"></span></h2>
+    <table><thead><tr><th>Charge</th><th>Size/Type</th><th class="num">Qty</th><th class="num">Rate</th><th>Ccy</th><th class="num">Amount</th></tr></thead>
+      <tbody id="rows"></tbody></table>
+    <div class="btn-row" style="background:#F7F8F9;padding:12px 16px;border-radius:8px;border:1px solid var(--line);">
+      Net Amount: <b class="mono" id="total">0.00</b>
+    </div>
+    <h2 style="margin-top:20px;">Container Details</h2>
+    <table><thead><tr><th>Container #</th><th>Size/Type</th><th class="num">Gross Wt (kg)</th></tr></thead>
+      <tbody id="containerRows"></tbody></table>
+    <div class="grid" style="margin-top:16px;">
+      <div class="field"><label>Currency</label><select id="currency" onchange="onInvCurrencyChange()"><option>USD</option><option>AED</option></select></div>
+      <div class="field"><label>Invoice Date</label><input type="date" id="invDate"></div>
+      <div class="field"><label>VAT Rate (%)</label><input type="number" id="vatRate" min="0" step="0.01" value="0" oninput="updateVatPreview()"></div>
+      <div class="field"><label>VAT Posts To (GL Account)</label><select id="vatAccount"></select></div>
+      <div class="field"><label>Exchange Rate <span class="sub" style="font-weight:400;">(AED per 1 unit of this currency)</span></label><input type="number" id="exchangeRate" min="0" step="0.0001" value="3.6" oninput="updateVatPreview()"></div>
+      <div class="field" style="grid-column:span 2;"><label>Bank Detail *</label><input id="bank" placeholder="e.g. FAB - AED, Account 001-234567-890"></div>
+    </div>
+    <div class="btn-row" style="background:#F7F8F9;padding:12px 16px;border-radius:8px;border:1px solid var(--line);margin-top:14px;">
+      <div>Subtotal: <b class="mono" id="subtotalPreview">0.00</b></div>
+      <div>VAT: <b class="mono" id="vatPreview">0.00</b></div>
+      <div>Grand Total: <b class="mono" id="grandTotalPreview">0.00</b></div>
+    </div>
+    <div class="btn-row">
+      <a href="/job/bl.html" class="btn" style="text-decoration:none;">← Back</a>
+      <button class="btn btn-primary" id="saveBtn">Save Invoice</button>
+    </div>
+  </div>
+
+  <div class="panel" id="docPanel" style="display:none;">
+    <div class="btn-row no-print" style="margin-top:0;">
+      <button class="btn" id="editBtn">← Edit</button>
+      <button class="btn btn-teal" id="emailBtn">📧 Email to Client</button>
+      <button class="btn btn-orange" onclick="window.print()">Download / Print PDF</button>
+    </div>
+    <div style="border-bottom:2px solid var(--ink);padding-bottom:12px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:flex-start;" id="invoiceHeader"></div>
+    <div id="docBody"></div>
+    <div id="invoiceFooter" style="border-top:1px solid var(--line);margin-top:24px;padding-top:10px;font-size:11px;color:var(--text-mute);text-align:center;"></div>
+  </div>
+</div>
+<script src="/js/api.js"></script>
+<script>
+renderTopNav("job/invoice.html").then(me => { window._invCurrentUser = me; });
+let jobId = getCurrentJobId();
+let job, lines, containers, company;
+let allParties = [], allInvoices = [];
+
+async function loadReadyToInvoice() {
+  const jobs = await api("GET", "/api/jobs");
+  const ready = jobs.filter(j => j.charges_approved);
+  const box = document.getElementById("readyToInvoiceBox");
+  if (!ready.length) { box.innerHTML = `<tr><td colspan="5"><div class="empty">No jobs with approved Charges yet.</div></td></tr>`; return; }
+  box.innerHTML = ready.map(j => `
+    <tr><td class="mono">${esc(j.job_no)}</td><td>${esc(j.client)||"—"}</td>
+      <td class="num mono">${j.invoice ? fmt(j.invoice.amount) : "—"}</td>
+      <td>${j.invoice_count > 0
+          ? `<span class="badge badge-settled">Invoice Created${j.invoice_count>1?` (${j.invoice_count})`:''} — ${esc(j.invoice.txn)}</span>`
+          : `<span class="badge badge-unsettled">Not Invoiced</span>`}</td>
+      <td>${j.invoice_count > 0
+          ? `<button class="btn btn-sm btn-orange" onclick="jumpToInvoice(${j.id})">Open</button> <button class="btn btn-sm btn-violet" onclick="jumpToNewInvoice(${j.id})">+ Another</button>`
+          : `<button class="btn btn-sm btn-violet" onclick="jumpToInvoice(${j.id})">Create Invoice</button>`}</td></tr>`).join("");
+}
+window.jumpToNewInvoice = (jid) => { setCurrentJobId(jid); localStorage.setItem("hd_force_new_invoice", "1"); location.reload(); };
+
+let filteredInvoices = [];
+let _invCurrentClientFilter = "";
+async function loadClientFinder() {
+  allParties = await api("GET", "/api/parties");
+  allInvoices = await api("GET", "/api/receivables");
+  applyInvoiceFilter();
+  loadReadyToInvoice();
+  attachAutocomplete(document.getElementById("clientFinder"),
+    () => allParties.filter(p=>p.is_client).map(p => ({ label: p.name, sub: p.code||"" })),
+    (item) => { _invCurrentClientFilter = item.label.toLowerCase(); applyInvoiceFilter(); });
+  document.getElementById("clientFinder").addEventListener("input", (e) => {
+    if (!e.target.value.trim()) { _invCurrentClientFilter = ""; applyInvoiceFilter(); }
+  });
+}
+function applyInvoiceFilter() {
+  const from = document.getElementById("fInvFrom").value;
+  const to = document.getElementById("fInvTo").value;
+  const status = document.getElementById("fInvStatus").value;
+  filteredInvoices = allInvoices.filter(i => {
+    if (_invCurrentClientFilter && (!i.client || i.client.toLowerCase() !== _invCurrentClientFilter)) return false;
+    if (from && (!i.date || i.date < from)) return false;
+    if (to && (!i.date || i.date > to)) return false;
+    if (status === "settled" && !i.settled) return false;
+    if (status === "unsettled" && i.settled) return false;
+    return true;
+  });
+  renderAllInvoices(filteredInvoices);
+}
+document.getElementById("fInvApplyBtn").onclick = applyInvoiceFilter;
+document.getElementById("fInvClearBtn").onclick = () => {
+  document.getElementById("fInvFrom").value = ""; document.getElementById("fInvTo").value = "";
+  document.getElementById("fInvStatus").value = ""; document.getElementById("clientFinder").value = "";
+  _invCurrentClientFilter = ""; applyInvoiceFilter();
+};
+document.getElementById("exportInvBtn").onclick = async () => {
+  const from = document.getElementById("fInvFrom").value, to = document.getElementById("fInvTo").value;
+  const dateRangeLabel = (from || to) ? `${from||"start"} to ${to||"today"}` : "All dates";
+  await exportRowsToExcel({
+    rows: filteredInvoices,
+    columns: [
+      { key: "txn", label: "Invoice #" }, { key: "job_no", label: "Job #" }, { key: "client", label: "Client" },
+      { key: "date", label: "Date" }, { key: "currency", label: "Currency" },
+      { key: "amount", label: "Amount", sum: true }, { key: "settled_amount", label: "Settled", sum: true },
+      { key: "outstanding", label: "Outstanding", value: r => r.amount - r.settled_amount, sum: true },
+      { key: "status", label: "Status", value: r => r.settled ? "Settled" : "Unsettled" },
+    ],
+    reportTitle: "Invoices Report", dateRangeLabel, fileName: "invoices-export.xlsx", sheetName: "Invoices",
+    user: window._invCurrentUser ? window._invCurrentUser.name : "",
+  });
+};
+function renderAllInvoices(rows) {
+  const box = document.getElementById("allInvoicesBox");
+  if (!rows.length) { box.innerHTML = `<tr><td colspan="7"><div class="empty">No invoices found.</div></td></tr>`; return; }
+  box.innerHTML = rows.map(i => {
+    const outstanding = i.amount - i.settled_amount;
+    return `<tr><td class="mono">${esc(i.txn)}</td><td class="mono">${esc(i.job_no)}</td><td>${esc(i.client)}</td><td>${i.date||"—"}</td>
+      <td class="num mono">${fmt(i.amount)}</td><td class="num mono">${fmt(outstanding)}</td>
+      <td><span class="badge ${i.settled?'badge-settled':'badge-unsettled'}">${i.settled?'Settled':'Unsettled'}</span></td>
+      <td><button class="btn btn-sm btn-orange" onclick="jumpToInvoice(${i.job_id})">Open</button></td></tr>`;
+  }).join("");
+}
+window.jumpToInvoice = (jid) => { setCurrentJobId(jid); localStorage.removeItem("hd_edit_invoice_id"); location.reload(); };
+
+// "+ Add Invoice" — search for a job by its serial number, pull its Booking/Charges data straight
+// into the invoice form below (same as opening that job directly), so a new invoice can be made
+// without leaving this page.
+document.getElementById("addInvoiceBtn").onclick = () => {
+  const box = document.getElementById("addInvoiceBox");
+  const showing = box.style.display !== "none";
+  if (showing) { box.style.display = "none"; return; }
+  box.style.display = "block";
+  box.innerHTML = `<div class="jobsearch"><input id="addInvJobNo" placeholder="Enter Job # e.g. EXP-00001/26" class="mono" style="max-width:220px;"><button class="btn btn-sm btn-teal" id="addInvGo">Load Job →</button></div>`;
+  document.getElementById("addInvGo").onclick = async () => {
+    const no = document.getElementById("addInvJobNo").value.trim();
+    if (!no) return toast("Enter a job number", "error");
+    try {
+      const j = await api("GET", `/api/jobs/by-no/${encodeURIComponent(no)}`);
+      setCurrentJobId(j.id);
+      location.reload();
+    } catch (e) { toast(e.message, "error"); }
+  };
+};
+
+async function loadCompany() {
+  if (!company) { try { company = await api("GET", "/api/company-profile"); } catch(e) { company = {}; } }
+  return company;
+}
+function renderHeaderFooter(txnLabel) {
+  const c = company || {};
+  document.getElementById("invoiceHeader").innerHTML = `
+    <div style="display:flex;align-items:center;gap:12px;">
+      ${c.logo ? `<img src="${c.logo}" style="max-height:54px;max-width:140px;">` : ""}
+      <div><h2 style="margin:0;">Tax Invoice</h2><div class="mono sub">${txnLabel||""}</div></div>
+    </div>
+    <div style="text-align:right;font-size:12px;">
+      <div style="font-weight:700;font-size:14px;">${c.name || "Harbor Desk Shipping LLC"}</div>
+      ${c.address ? `<div>${c.address}</div>` : ""}
+      ${c.email ? `<div>${c.email}</div>` : ""}
+      ${c.phone ? `<div>${c.phone}</div>` : ""}
+    </div>`;
+  const stamp = window._invCurrentUser ? `<div style="margin-top:4px;">Printed ${new Date().toLocaleString()} by ${esc(window._invCurrentUser.name)}</div>` : "";
+  document.getElementById("invoiceFooter").innerHTML = [c.name, c.address, c.email, c.phone].filter(Boolean).join(" · ") + stamp;
+}
+
+function containerRowsHtml() {
+  return (containers||[]).map(c => `<tr><td class="mono">${c.no||"—"}</td><td>${c.size}</td><td class="num mono">${fmt(c.weight)}</td></tr>`).join("")
+    || `<tr><td colspan="3"><div class="empty">No containers added yet — add them under B/L &amp; Containers.</div></td></tr>`;
+}
+
+let editingInvoiceId = null;
+async function load() {
+  job = await api("GET", `/api/jobs/${jobId}`);
+  await loadCompany();
+  document.getElementById("jobNoLabel").textContent = job.job_no;
+  lines = await api("GET", `/api/jobs/${jobId}/charges`);
+  containers = await api("GET", `/api/jobs/${jobId}/containers`);
+  document.getElementById("containerRows").innerHTML = containerRowsHtml();
+  const forceNew = localStorage.getItem("hd_force_new_invoice") === "1";
+  localStorage.removeItem("hd_force_new_invoice");
+  const editId = localStorage.getItem("hd_edit_invoice_id");
+  localStorage.removeItem("hd_edit_invoice_id");
+  editingInvoiceId = (editId && job.invoice && String(job.invoice.id) === editId) ? Number(editId) : null;
+  if (!forceNew && !editingInvoiceId && job.invoice && job.invoice.txn) return showDoc();
+  if (!job.booking_approved || !job.charges_approved) {
+    const reason = !job.booking_approved
+      ? "Booking Info hasn't been approved yet"
+      : "Charges haven't been approved yet";
+    document.getElementById("formPanel").innerHTML = `
+      <h2>Generate Invoice — Job <span class="mono">${job.job_no}</span></h2>
+      <div class="missing-box" style="background:#FDF2E3;border:1px solid #F0DBB5;border-radius:8px;padding:14px 16px;color:#7A4B00;">
+        ⚠ ${reason} — invoices can't be generated until it is.
+      </div>
+      <div class="btn-row"><a href="/job/booking.html?open=1" class="btn btn-orange" style="text-decoration:none;">← Go to Booking / Charges</a></div>`;
+    return;
+  }
+  document.getElementById("rows").innerHTML = lines.map(l => `
+    <tr><td>${l.code}</td><td>${l.size}</td><td class="num mono">${l.qty}</td><td class="num mono">${fmt(l.rate)}</td><td>${l.currency}</td><td class="num mono">${fmt(l.amt)}${l.currency!=='AED'?`<div class="sub" style="font-size:10.5px;">= AED ${fmt(l.base_amt)}</div>`:''}</td></tr>`).join("") || `<tr><td colspan="6"><div class="empty">No charges found.</div></td></tr>`;
+  const subtotal = lines.reduce((s,l)=>s+l.base_amt,0);
+  document.getElementById("total").textContent = fmt(subtotal);
+  const accounts = await api("GET", "/api/accounts");
+  document.getElementById("vatAccount").innerHTML = accounts.filter(a=>a.type==="Liability").map(a=>`<option value="${a.code}" ${a.code==="2100"?"selected":""}>${a.code} — ${a.name}</option>`).join("");
+  const formHeading = document.querySelector("#formPanel h2");
+  if (editingInvoiceId) {
+    // Pre-fill from the invoice being edited rather than starting a fresh blank form.
+    const inv = job.invoice;
+    formHeading.textContent = `Edit Invoice ${inv.txn} — Job ${job.job_no}`;
+    document.getElementById("currency").value = inv.currency;
+    document.getElementById("invDate").value = inv.date;
+    document.getElementById("vatRate").value = inv.vat_rate || 0;
+    document.getElementById("vatAccount").value = inv.vat_account || "2100";
+    document.getElementById("exchangeRate").value = inv.exchange_rate || 1;
+    document.getElementById("bank").value = inv.bank || "";
+    document.getElementById("saveBtn").textContent = "Save Changes";
+  } else {
+    formHeading.textContent = `Generate Invoice — Job ${job.job_no}`;
+    document.getElementById("invDate").value = new Date().toISOString().slice(0,10);
+    document.getElementById("saveBtn").textContent = "Save Invoice";
+    document.getElementById("exchangeRate").value = document.getElementById("currency").value === "AED" ? 1 : 3.6;
+  }
+  updateVatPreview();
+}
+window.onInvCurrencyChange = () => {
+  const currency = document.getElementById("currency").value;
+  document.getElementById("exchangeRate").value = currency === "AED" ? 1 : 3.6;
+  updateVatPreview();
+};
+window.updateVatPreview = () => {
+  const subtotalAed = (lines||[]).reduce((s,l)=>s+l.base_amt,0);
+  const vatRate = Number(document.getElementById("vatRate").value || 0);
+  const vatAmtAed = subtotalAed * vatRate / 100;
+  const currency = document.getElementById("currency").value;
+  const exRate = currency === "AED" ? 1 : (Number(document.getElementById("exchangeRate").value) || 1);
+  // Charges are tracked in AED internally (for the ledger) — the invoice shown to the client
+  // converts that into whichever currency was picked, using AED-per-unit exchange rate.
+  document.getElementById("subtotalPreview").textContent = `${currency} ${fmt(subtotalAed / exRate)}`;
+  document.getElementById("vatPreview").textContent = `${currency} ${fmt(vatAmtAed / exRate)}`;
+  document.getElementById("grandTotalPreview").textContent = `${currency} ${fmt((subtotalAed + vatAmtAed) / exRate)}`;
+};
+function showDoc() {
+  document.getElementById("formPanel").style.display = "none";
+  document.getElementById("docPanel").style.display = "block";
+  renderHeaderFooter("Txn # " + job.invoice.txn);
+  const exRate = job.invoice.currency === "AED" ? 1 : (job.invoice.exchange_rate || 1);
+  const subtotalAed = job.invoice.amount - (job.invoice.vat_amount||0);
+  const subtotal = subtotalAed / exRate;
+  const vatAmt = (job.invoice.vat_amount||0) / exRate;
+  const grandTotal = job.invoice.amount / exRate;
+  document.getElementById("docBody").innerHTML = `
+    <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:14px;">
+      <div><div class="sub">Bill To</div><b>${job.client||"—"}</b></div>
+      <div><div class="sub">HBL #</div><b class="mono">${job.bl ? job.bl.hbl : "—"}</b></div>
+      <div><div class="sub">Date</div><b>${job.invoice.date}</b></div>
+    </div>
+    <table><thead><tr><th>Charge</th><th>Size/Type</th><th class="num">Qty</th><th class="num">Rate</th><th>Ccy</th><th class="num">Amount</th></tr></thead>
+    <tbody>${lines.map(l=>`<tr><td>${l.code}</td><td>${l.size}</td><td class="num mono">${l.qty}</td><td class="num mono">${fmt(l.rate)}</td><td>${l.currency}</td><td class="num mono">${fmt(l.amt)}${l.currency!=='AED'?`<div class="sub" style="font-size:10.5px;">= AED ${fmt(l.base_amt)}</div>`:''}</td></tr>`).join("")}</tbody></table>
+    <h2 style="font-size:13.5px;margin-top:16px;">Container Details</h2>
+    <table><thead><tr><th>Container #</th><th>Size/Type</th><th class="num">Gross Wt (kg)</th></tr></thead>
+    <tbody>${containerRowsHtml()}</tbody></table>
+    <div style="margin-top:14px;font-size:13px;">
+      <div>Subtotal: ${job.invoice.currency} ${fmt(subtotal)}</div>
+      ${job.invoice.vat_amount ? `<div>VAT (${job.invoice.vat_rate}%): ${job.invoice.currency} ${fmt(vatAmt)}</div>` : ""}
+      <div style="font-weight:700;margin-top:4px;">Grand Total: ${job.invoice.currency} ${fmt(grandTotal)}</div>
+      ${exRate !== 1 ? `<div class="sub">Exchange Rate: 1 ${job.invoice.currency} = AED ${exRate}</div>` : ""}
+    </div>
+    <div class="sub" style="margin-top:6px;">Bank: ${job.invoice.bank}</div>`;
+}
+document.getElementById("saveBtn").onclick = async () => {
+  const bank = document.getElementById("bank").value;
+  if (!bank) return toast("Add bank details", "error");
+  if (!lines.length) return toast("No charges to invoice", "error");
+  const payload = {
+    date: document.getElementById("invDate").value, currency: document.getElementById("currency").value, bank,
+    vat_rate: document.getElementById("vatRate").value,
+    vat_account: document.getElementById("vatAccount").value,
+    exchange_rate: document.getElementById("exchangeRate").value
+  };
+  try {
+    if (editingInvoiceId) {
+      await api("PUT", `/api/invoices/${editingInvoiceId}`, payload);
+      toast("Invoice updated", "success");
+    } else {
+      await api("POST", `/api/jobs/${jobId}/invoice`, payload);
+      toast("Invoice saved & posted to Accounting", "success");
+    }
+    editingInvoiceId = null;
+    load();
+  } catch (e) { toast(e.message, "error"); }
+};
+document.getElementById("editBtn").onclick = () => {
+  if (job.invoice && job.invoice.id) localStorage.setItem("hd_edit_invoice_id", String(job.invoice.id));
+  location.reload();
+};
+document.getElementById("emailBtn").onclick = async () => {
+  const btn = document.getElementById("emailBtn");
+  btn.disabled = true; btn.textContent = "Sending...";
+  try {
+    const result = await api("POST", `/api/jobs/${jobId}/invoice/email`);
+    toast(`Invoice emailed to ${result.to}`, "success");
+  } catch (e) {
+    toast(e.message, "error");
+  } finally {
+    btn.disabled = false; btn.textContent = "📧 Email to Client";
+  }
+};
+loadClientFinder();
+load();
+</script>
+</body>
+</html>

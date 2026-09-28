@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Profit & Loss — Harbor Desk</title><link rel="stylesheet" href="/css/style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+</head>
+<body>
+<div class="topnav" id="topnav"></div>
+<div class="wrap">
+  <div class="panel">
+    <div style="display:flex;justify-content:space-between;flex-wrap:wrap;align-items:flex-end;gap:12px;">
+      <div><h2>Profit &amp; Loss — By Job</h2><p class="sub">Revenue (from invoices) less Cost (from vendor bills), filterable by Client, Vessel, and Voyage.</p></div>
+      <button class="btn btn-sm" id="exportBtn">⬇ Export to Excel</button>
+        <button class="btn btn-sm" onclick="window.print()">🖨 Print</button>
+    </div>
+    <div class="grid">
+      <div class="field"><label>Client</label><select id="clientFilter"><option value="">— All Clients —</option></select></div>
+      <div class="field"><label>Vessel</label><select id="vesselFilter" onchange="onVesselFilterChange()"><option value="">— All Vessels —</option></select></div>
+      <div class="field"><label>Voyage</label><select id="voyageFilter"><option value="">— All Voyages —</option></select></div>
+      <div class="field" style="align-self:flex-end;"><button class="btn btn-primary" id="runBtn">Run Report</button></div>
+    </div>
+    <div class="btn-row" style="background:#F7F8F9;padding:12px 16px;border-radius:8px;border:1px solid var(--line);" id="totalsBox"></div>
+    <table><thead><tr><th>Job #</th><th>Client</th><th>Date</th><th class="num">Revenue</th><th class="num">Cost</th><th class="num">Profit</th><th class="num">Margin %</th></tr></thead>
+      <tbody id="rows"></tbody></table>
+  </div>
+</div>
+<script src="/js/api.js"></script>
+<script>
+renderTopNav("reports/pl.html");
+let vessels = [];
+let lastData = null;
+
+async function init() {
+  const jobs = await api("GET", "/api/reports/job-list");
+  const clients = [...new Set(jobs.map(j=>j.client).filter(Boolean))].sort();
+  document.getElementById("clientFilter").innerHTML += clients.map(c=>`<option value="${c}">${c}</option>`).join("");
+  vessels = await api("GET", "/api/vessels");
+  document.getElementById("vesselFilter").innerHTML += vessels.map(v=>`<option value="${v.id}">${v.name}</option>`).join("");
+  await run();
+}
+window.onVesselFilterChange = () => {
+  const v = vessels.find(v => String(v.id) === document.getElementById("vesselFilter").value);
+  document.getElementById("voyageFilter").innerHTML = `<option value="">— All Voyages —</option>` + (v ? v.voyages.map(voy=>`<option value="${voy.id}">${voy.no}</option>`).join("") : "");
+};
+async function run() {
+  const params = new URLSearchParams();
+  const client = document.getElementById("clientFilter").value;
+  const vessel_id = document.getElementById("vesselFilter").value;
+  const voyage_id = document.getElementById("voyageFilter").value;
+  if (client) params.set("client", client);
+  if (vessel_id) params.set("vessel_id", vessel_id);
+  if (voyage_id) params.set("voyage_id", voyage_id);
+  const data = await api("GET", `/api/reports/pl?${params.toString()}`);
+  lastData = data;
+  document.getElementById("rows").innerHTML = data.rows.map(r => `
+    <tr><td class="mono">${r.job_no}</td><td>${r.client||"—"}</td><td>${r.job_date||"—"}</td>
+      <td class="num mono">${fmt(r.revenue)}</td><td class="num mono">${fmt(r.cost)}</td>
+      <td class="num mono" style="color:${r.profit>=0?'#1F8A5F':'#C1442D'};font-weight:600;">${fmt(r.profit)}</td>
+      <td class="num mono">${r.margin_pct}%</td></tr>`).join("") || `<tr><td colspan="7"><div class="empty">No jobs match this filter.</div></td></tr>`;
+  const marginPct = data.totals.revenue > 0 ? Math.round((data.totals.profit/data.totals.revenue)*1000)/10 : 0;
+  document.getElementById("totalsBox").innerHTML = `
+    <div>Total Revenue: <b class="mono">${fmt(data.totals.revenue)}</b></div>
+    <div>Total Cost: <b class="mono">${fmt(data.totals.cost)}</b></div>
+    <div>Net Profit: <b class="mono" style="color:${data.totals.profit>=0?'#1F8A5F':'#C1442D'};">${fmt(data.totals.profit)}</b></div>
+    <div>Overall Margin: <b class="mono">${marginPct}%</b></div>`;
+}
+document.getElementById("runBtn").onclick = run;
+document.getElementById("exportBtn").onclick = () => {
+  if (!lastData) return;
+  const data = lastData.rows.map(r => ({ "Job #": r.job_no, Client: r.client, Date: r.job_date, Revenue: r.revenue, Cost: r.cost, Profit: r.profit, "Margin %": r.margin_pct }));
+  data.push({ "Job #": "", Client: "TOTAL", Revenue: lastData.totals.revenue, Cost: lastData.totals.cost, Profit: lastData.totals.profit });
+  const ws = XLSX.utils.json_to_sheet(data);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "P&L");
+  XLSX.writeFile(wb, "profit-and-loss.xlsx");
+};
+init();
+</script>
+</body>
+</html>

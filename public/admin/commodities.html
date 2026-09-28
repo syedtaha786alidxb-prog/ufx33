@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Commodities — Harbor Desk</title><link rel="stylesheet" href="/css/style.css"></head>
+<body>
+<div class="topnav" id="topnav"></div>
+<div class="wrap">
+  <div class="panel">
+    <div style="display:flex;justify-content:space-between;flex-wrap:wrap;">
+      <div><h2>Commodities</h2><p class="sub">Master list used by the Commodity field in Booking Info.</p></div>
+      <button class="btn btn-sm btn-violet" id="newBtn">+ New Commodity</button>
+    </div>
+    <table><thead><tr><th>Name</th><th></th></tr></thead><tbody id="rows"></tbody></table>
+  </div>
+
+  <div class="panel">
+    <h2>Bulk Upload</h2>
+    <p class="sub">Paste one commodity name per line, then click Add All. Duplicates are skipped automatically.</p>
+    <textarea id="bulkText" rows="6" placeholder="GENERAL CARGO
+MACHINERY PARTS
+TEXTILES
+FROZEN FOOD"></textarea>
+    <div class="btn-row"><button class="btn btn-primary" id="bulkBtn">Add All</button></div>
+    <div id="bulkResult"></div>
+  </div>
+</div>
+<script src="/js/api.js"></script>
+<script>
+let allowDelete = false;
+async function load() {
+  const items = await api("GET", "/api/commodities");
+  document.getElementById("rows").innerHTML = items.map(c => `
+    <tr><td>${c.name}</td><td>${allowDelete ? `<button class="btn btn-sm" onclick="delItem(${c.id})">✕</button>` : ""}</td></tr>`).join("")
+    || `<tr><td colspan="2"><div class="empty">No commodities yet.</div></td></tr>`;
+}
+document.getElementById("newBtn").onclick = async () => {
+  const name = prompt("Commodity name:"); if (!name) return;
+  try { await api("POST", "/api/commodities", { name }); toast("Added","success"); load(); }
+  catch(e){ toast(e.message,"error"); }
+};
+window.delItem = async (id) => {
+  if (!confirm("Delete this commodity?")) return;
+  try { await api("DELETE", `/api/commodities/${id}`); toast("Deleted","success"); load(); }
+  catch(e){ toast(e.message,"error"); }
+};
+document.getElementById("bulkBtn").onclick = async () => {
+  const names = document.getElementById("bulkText").value.split("\n").map(s=>s.trim()).filter(Boolean);
+  if (!names.length) return toast("Paste at least one commodity name", "error");
+  const result = await api("POST", "/api/commodities/bulk", { names });
+  document.getElementById("bulkResult").innerHTML = `<div class="empty" style="border-style:solid;">Added ${result.added}, skipped ${result.skipped} duplicate(s).</div>`;
+  document.getElementById("bulkText").value = "";
+  toast("Bulk upload complete", "success");
+  load();
+};
+(async function init() {
+  const me = await renderTopNav("admin/commodities.html");
+  allowDelete = canDelete(me);
+  load();
+})();
+</script>
+</body>
+</html>

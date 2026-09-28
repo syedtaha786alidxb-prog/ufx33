@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Bank Reconciliation — Harbor Desk</title><link rel="stylesheet" href="/css/style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  .recon-summary{display:flex;gap:24px;flex-wrap:wrap;background:#F7F8F9;padding:14px 16px;border-radius:8px;border:1px solid var(--line);margin:14px 0;}
+  .recon-summary div{font-size:13px;}
+  .recon-summary b{font-size:15px;display:block;margin-top:2px;}
+  .diff-ok{color:var(--green);}
+  .diff-bad{color:var(--red);}
+</style>
+</head>
+<body>
+<div class="topnav" id="topnav"></div>
+<div class="wrap">
+  <div class="panel">
+    <h2>Bank Reconciliation</h2>
+    <p class="sub">Pick a bank/cash account, enter the statement closing balance, then tick off every line that appears on the statement.</p>
+    <div class="btn-row" style="margin-top:0;"><button class="btn btn-sm" id="exportBtn">⬇ Export to Excel</button> <button class="btn btn-sm" onclick="window.print()">🖨 Print</button></div>
+    <div class="grid3">
+      <div class="field"><label>Account</label><select id="acctSelect"></select></div>
+      <div class="field"><label>Statement Date</label><input type="date" id="stmtDate"></div>
+      <div class="field"><label>Statement Closing Balance</label><input type="number" step="0.01" id="stmtBalance" oninput="renderSummary()"></div>
+    </div>
+
+    <div class="recon-summary" id="summaryBox" style="display:none;">
+      <div>Book Balance<b class="mono" id="bookBalance">0.00</b></div>
+      <div>Cleared Balance<b class="mono" id="clearedBalance">0.00</b></div>
+      <div>Statement Balance<b class="mono" id="stmtBalanceEcho">0.00</b></div>
+      <div>Difference<b class="mono" id="diffBalance">0.00</b></div>
+    </div>
+
+    <table>
+      <thead><tr><th style="width:32px;">✓</th><th>Date</th><th>Voucher</th><th>Narration</th><th class="num">Debit</th><th class="num">Credit</th><th class="num">Running Balance</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+</div>
+<script src="/js/api.js"></script>
+<script>
+renderTopNav("accounting/bankrecon.html");
+let ledgerRows = [];
+
+async function loadAccounts() {
+  const accts = await api("GET", "/api/bank-accounts");
+  document.getElementById("acctSelect").innerHTML = accts.map(a => `<option value="${a.code}">${a.code} — ${a.name}</option>`).join("");
+}
+
+function renderSummary() {
+  const book = ledgerRows.length ? ledgerRows[ledgerRows.length-1].balance : 0;
+  const cleared = ledgerRows.filter(r=>r.reconciled).reduce((s,r)=>s+r.debit-r.credit,0);
+  const stmt = Number(document.getElementById("stmtBalance").value || 0);
+  const diff = stmt - cleared;
+  document.getElementById("summaryBox").style.display = "flex";
+  document.getElementById("bookBalance").textContent = fmt(book);
+  document.getElementById("clearedBalance").textContent = fmt(cleared);
+  document.getElementById("stmtBalanceEcho").textContent = fmt(stmt);
+  const diffEl = document.getElementById("diffBalance");
+  diffEl.textContent = fmt(diff);
+  diffEl.className = "mono " + (Math.abs(diff) < 0.01 ? "diff-ok" : "diff-bad");
+}
+
+async function loadLedger() {
+  const code = document.getElementById("acctSelect").value;
+  if (!code) return;
+  ledgerRows = await api("GET", `/api/ledger/${code}`);
+  document.getElementById("rows").innerHTML = ledgerRows.map(r => `
+    <tr>
+      <td><input type="checkbox" ${r.reconciled?"checked":""} onchange="toggleLine(${r.id},this.checked)"></td>
+      <td>${r.date}</td><td class="mono">${r.no}</td><td>${esc(r.narration)}</td>
+      <td class="num mono">${r.debit?fmt(r.debit):""}</td><td class="num mono">${r.credit?fmt(r.credit):""}</td>
+      <td class="num mono">${fmt(r.balance)}</td>
+    </tr>`).join("") || `<tr><td colspan="7"><div class="empty">No transactions posted to this account yet.</div></td></tr>`;
+  renderSummary();
+}
+window.toggleLine = async (id, checked) => {
+  try {
+    await api("POST", `/api/ledger-lines/${id}/reconcile`, { reconciled: checked, date: document.getElementById("stmtDate").value });
+    const row = ledgerRows.find(r=>r.id===id);
+    if (row) row.reconciled = checked;
+    renderSummary();
+  } catch(e){ toast(e.message, "error"); }
+};
+document.getElementById("acctSelect").onchange = loadLedger;
+document.getElementById("exportBtn").onclick = () => {
+  if (!ledgerRows.length) return toast("Nothing to export yet", "error");
+  const acctLabel = document.getElementById("acctSelect").selectedOptions[0]?.textContent || "Account";
+  const data = ledgerRows.map(r => ({
+    Date: r.date, Voucher: r.no, Narration: r.narration,
+    Debit: r.debit || 0, Credit: r.credit || 0, "Running Balance": r.balance,
+    Cleared: r.reconciled ? "Yes" : "No"
+  }));
+  const ws = XLSX.utils.json_to_sheet(data);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Reconciliation");
+  XLSX.writeFile(wb, `bank-reconciliation-${acctLabel.split(" ")[0]}-${document.getElementById("stmtDate").value}.xlsx`);
+};
+(async function init() {
+  document.getElementById("stmtDate").value = new Date().toISOString().slice(0,10);
+  await loadAccounts();
+  await loadLedger();
+})();
+</script>
+</body>
+</html>

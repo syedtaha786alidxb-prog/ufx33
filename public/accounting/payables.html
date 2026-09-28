@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Payables — Harbor Desk</title><link rel="stylesheet" href="/css/style.css">
+<style>
+  .job-pick-list{border:1px solid var(--line);border-radius:8px;padding:10px 12px;max-height:180px;overflow-y:auto;background:#FAFBFC;}
+  .job-pick-row{display:flex;align-items:center;gap:8px;padding:4px 0;font-size:13px;}
+  .job-pick-row input{width:auto;}
+</style>
+</head>
+<body>
+<div class="topnav" id="topnav"></div>
+<div class="wrap">
+  <div class="panel">
+    <h2>New Vendor Bill</h2>
+    <p class="sub">Record a cost owed to a shipping line, agent, or other vendor — and which export/import job(s) it's for.</p>
+    <div class="grid3">
+      <div class="field"><label>Vendor *</label><input id="vendor"></div>
+      <div class="field"><label>Bill # <span class="sub" style="font-weight:400;">(leave blank to auto-generate)</span></label><input id="billNo"></div>
+      <div class="field"><label>Date</label><input type="date" id="date"></div>
+      <div class="field"><label>Bill Type *</label>
+        <select id="billType" onchange="onBillTypeChange()"><option value="Regular">Regular Bill</option><option value="Advance">Advance Payment</option></select>
+      </div>
+      <div class="field"><label>Amount *</label><input type="number" id="amount" min="0" step="0.01"></div>
+      <div class="field"><label>Currency *</label>
+        <select id="billCurrency" onchange="onCurrencyChange()">
+          <option value="AED">AED</option><option value="USD">USD</option><option value="EUR">EUR</option><option value="GBP">GBP</option><option value="INR">INR</option>
+        </select>
+      </div>
+      <div class="field" id="exRateField" style="display:none;">
+        <label>Exchange Rate → AED *</label><input type="number" id="exRate" min="0" step="0.0001" placeholder="e.g. 3.6725">
+      </div>
+      <div class="field" id="againstTypeField">
+        <label>This payment is against *</label>
+        <select id="againstType" onchange="onAgainstTypeChange()">
+          <option value="Charge">A Charge (e.g. Slot, THC, Storage)</option>
+          <option value="Service" selected>A Service (freight, trucking, etc.)</option>
+        </select>
+      </div>
+      <div class="field" id="againstRefField"><label>Service Description *</label><input id="againstRef" placeholder="e.g. Ocean freight for this voyage"></div>
+    </div>
+
+    <div class="grid3" id="costAccountRow">
+      <div class="field"><label>Vessel (to pull its jobs)</label><select id="vesselSelect"><option value="">— None —</option></select></div>
+      <div class="field"><label>Voyage (narrows to just this voyage)</label><select id="voyageSelect"><option value="">— All voyages —</option></select></div>
+      <div class="field" id="expenseAccountField"><label>Cost Account</label><select id="expenseAccount"></select></div>
+    </div>
+
+    <div class="field" style="margin-bottom:14px;">
+      <label>Which job(s) is this payment for? <span class="sub" style="font-weight:400;">(tick any that apply — select a vessel above to list its jobs)</span></label>
+      <div class="job-pick-list" id="jobPickList"><div class="sub">Select a vessel to see its jobs, or leave all unticked for a general/vessel-level cost.</div></div>
+    </div>
+
+    <div class="btn-row"><button class="btn btn-violet" id="saveBillBtn">Save Bill</button></div>
+  </div>
+
+  <div class="panel">
+    <div style="display:flex;justify-content:space-between;flex-wrap:wrap;align-items:flex-end;gap:10px;">
+      <h2>Payables — Vendor Side</h2>
+      <input id="billSearch" placeholder="🔎 Search bill #, vendor, or job #..." style="max-width:280px;">
+      <button class="btn btn-sm" onclick="window.print()">🖨 Print</button>
+    </div>
+    <table><thead><tr><th>Bill #</th><th>Vendor</th><th>Against</th><th>Job(s)</th><th>Date</th><th class="num">Amount</th><th class="num">Paid</th><th class="num">Outstanding</th><th>Status</th><th></th><th></th></tr></thead>
+      <tbody id="rows"></tbody></table>
+  </div>
+</div>
+<div id="modalRoot"></div>
+<script src="/js/api.js"></script>
+<script>
+renderTopNav("accounting/payables.html");
+let bankAccounts = [];
+let vessels = [];
+let chargeCodes = [];
+let pickableJobs = [];
+let preselectJobId = null;
+
+function onBillTypeChange() {
+  const isAdvance = document.getElementById("billType").value === "Advance";
+  document.getElementById("againstTypeField").style.display = isAdvance ? "none" : "block";
+  document.getElementById("againstRefField").style.display = isAdvance ? "none" : "block";
+  document.getElementById("expenseAccountField").style.display = isAdvance ? "none" : "block";
+}
+function onCurrencyChange() {
+  const currency = document.getElementById("billCurrency").value;
+  const field = document.getElementById("exRateField");
+  if (currency === "AED") { field.style.display = "none"; document.getElementById("exRate").value = ""; }
+  else field.style.display = "block";
+}
+function onAgainstTypeChange() {
+  const type = document.getElementById("againstType").value;
+  const field = document.getElementById("againstRefField");
+  if (type === "Charge") {
+    field.innerHTML = `<label>Which Charge(s) *</label>
+      <div class="job-pick-list" style="max-height:140px;">
+        ${chargeCodes.map(c => `<div class="job-pick-row"><input type="checkbox" class="chargeChk" value="${c.code} — ${c.name}"><label>${c.code} — ${c.name}</label></div>`).join("")}
+      </div>`;
+  } else {
+    field.innerHTML = `<label>Service Description *</label><input id="againstRef" placeholder="e.g. Ocean freight for this voyage">`;
+  }
+}
+function getAgainstRef() {
+  const type = document.getElementById("againstType").value;
+  if (type === "Charge") {
+    const checked = [...document.querySelectorAll(".chargeChk:checked")].map(c => c.value);
+    return checked.join(", ");
+  }
+  return document.getElementById("againstRef").value;
+}
+
+function renderJobPicker() {
+  const box = document.getElementById("jobPickList");
+  if (!pickableJobs.length) {
+    box.innerHTML = `<div class="sub">No jobs found for this selection.</div>`;
+    return;
+  }
+  box.innerHTML = pickableJobs.map(j => `
+    <div class="job-pick-row">
+      <input type="checkbox" id="jobchk_${j.id}" value="${j.id}" ${String(j.id)===String(preselectJobId)?"checked":""}>
+      <label for="jobchk_${j.id}"><span class="mono">${j.job_no}</span> — ${j.client||"—"} <span class="badge ${j.direction==='Import'?'badge-unsettled':'badge-settled'}">${j.direction}</span></label>
+    </div>`).join("");
+}
+
+async function onVesselChange() {
+  const vesselId = document.getElementById("vesselSelect").value;
+  const v = vessels.find(v=>v.id==vesselId);
+  document.getElementById("voyageSelect").innerHTML = `<option value="">— All voyages —</option>` + (v ? v.voyages.map(voy=>`<option value="${voy.id}">${voy.no}</option>`).join("") : "");
+  if (!vesselId) { pickableJobs = []; renderJobPicker(); return; }
+  pickableJobs = await api("GET", `/api/vessels/${vesselId}/jobs`);
+  renderJobPicker();
+}
+async function onVoyageChange() {
+  const voyageId = document.getElementById("voyageSelect").value;
+  const vesselId = document.getElementById("vesselSelect").value;
+  pickableJobs = voyageId ? await api("GET", `/api/voyages/${voyageId}/jobs`) : (vesselId ? await api("GET", `/api/vessels/${vesselId}/jobs`) : []);
+  renderJobPicker();
+}
+document.getElementById("vesselSelect").onchange = onVesselChange;
+document.getElementById("voyageSelect").onchange = onVoyageChange;
+
+async function init() {
+  document.getElementById("date").value = new Date().toISOString().slice(0,10);
+  const accounts = await api("GET", "/api/accounts");
+  accountsCache = accounts;
+  document.getElementById("expenseAccount").innerHTML = accounts.filter(a=>a.type==="Expense").map(a=>`<option value="${a.code}">${a.code} — ${a.name}</option>`).join("");
+  const parties = await api("GET", "/api/parties");
+  attachAutocomplete(document.getElementById("vendor"), () => parties.filter(p=>p.is_vendor).map(p => ({ label: p.name, sub: p.code||"" })));
+  try {
+    const { preview } = await api("GET", "/api/payables/next-no");
+    document.getElementById("billNo").placeholder = `Auto: ${preview}`;
+  } catch(e) {}
+  chargeCodes = await api("GET", "/api/charge-codes");
+  vessels = await api("GET", "/api/vessels");
+  document.getElementById("vesselSelect").innerHTML += vessels.map(v=>`<option value="${v.id}">${v.name}</option>`).join("");
+  onAgainstTypeChange();
+  onCurrencyChange();
+  onBillTypeChange();
+  await loadBills();
+
+  const jobIdParam = getCurrentJobId();
+  if (jobIdParam) {
+    try {
+      const j = await api("GET", `/api/jobs/${jobIdParam}`);
+      preselectJobId = j.id;
+      if (j.vessel_id) {
+        document.getElementById("vesselSelect").value = j.vessel_id;
+        await onVesselChange();
+        if (j.voyage_id) { document.getElementById("voyageSelect").value = j.voyage_id; await onVoyageChange(); }
+      }
+    } catch(e){}
+  }
+}
+async function loadBills() {
+  allBills = await api("GET", "/api/payables");
+  renderBills(allBills);
+}
+function renderBills(bills) {
+  document.getElementById("rows").innerHTML = bills.map(b => {
+    const outstanding = b.amount - b.settled_amount;
+    const jobsLabel = (b.jobs && b.jobs.length) ? b.jobs.map(j=>j.job_no).join(", ") : "—";
+    return `<tr><td class="mono">${b.bill_no}</td><td>${esc(b.vendor)}${b.bill_type==='Advance'?' <span class="badge badge-unsettled">Advance</span>':''}</td><td>${b.against_type==='Charge'?'📋 ':'🔧 '}${esc(b.against_ref)||'—'}</td><td class="mono" style="font-size:12px;">${jobsLabel}</td><td>${b.date}</td>
+      <td class="num mono">${fmt(b.amount)} ${b.currency&&b.currency!=='AED'?`<span class="sub">${b.currency}</span>`:''}${b.currency&&b.currency!=='AED'?`<div class="sub" style="font-size:10.5px;">@ ${b.exchange_rate} = AED ${fmt(b.base_amount)}</div>`:''}</td>
+      <td class="num mono">${fmt(b.settled_amount)}</td><td class="num mono">${fmt(outstanding)}</td>
+      <td><span class="badge ${b.settled?'badge-settled':'badge-unsettled'}">${b.settled?'Paid':'Unpaid'}</span></td>
+      <td>${b.settled ? "" : `<button class="btn btn-sm btn-violet" onclick="recordPayment(${b.id},${outstanding})">Record Payment</button>`}</td>
+      <td style="display:flex;gap:4px;">
+        ${b.settled_amount>0 ? "" : `<button class="btn btn-sm" onclick="openEditBillModal(${b.id})">Edit</button>`}
+        <button class="btn btn-sm" onclick="printBill(${b.id})">🖨</button>
+        ${b.settled_amount>0 ? "" : `<button class="btn btn-sm" onclick="deleteBill(${b.id})">✕</button>`}
+      </td></tr>`;
+  }).join("") || `<tr><td colspan="11"><div class="empty">${bills.length !== allBills.length ? "No bills match your search." : "No vendor bills yet."}</div></td></tr>`;
+}
+document.getElementById("billSearch").addEventListener("input", (e) => {
+  const q = e.target.value.trim().toLowerCase();
+  if (!q) return renderBills(allBills);
+  renderBills(allBills.filter(b =>
+    (b.bill_no||"").toLowerCase().includes(q) ||
+    (b.vendor||"").toLowerCase().includes(q) ||
+    (b.jobs||[]).some(j => j.job_no.toLowerCase().includes(q))
+  ));
+});
+document.getElementById("saveBillBtn").onclick = async () => {
+  const vendor = document.getElementById("vendor").value;
+  const amount = Number(document.getElementById("amount").value);
+  const currency = document.getElementById("billCurrency").value;
+  const exchange_rate = currency === "AED" ? 1 : Number(document.getElementById("exRate").value);
+  const billType = document.getElementById("billType").value;
+  const against_type = document.getElementById("againstType").value;
+  const against_ref = billType === "Advance" ? "Advance payment" : getAgainstRef();
+  if (!vendor || !amount) return toast("Enter vendor and amount", "error");
+  if (currency !== "AED" && !exchange_rate) return toast(`Enter the exchange rate for ${currency} → AED`, "error");
+  if (billType !== "Advance" && !against_ref) return toast("Select or describe what this payment is against", "error");
+
+  const job_ids = pickableJobs.filter(j => document.getElementById(`jobchk_${j.id}`) && document.getElementById(`jobchk_${j.id}`).checked).map(j=>j.id);
+
+  try {
+    const bill = await api("POST", "/api/payables", {
+      vendor, bill_no: document.getElementById("billNo").value, job_ids, bill_type: billType,
+      vessel_id: document.getElementById("vesselSelect").value || null,
+      voyage_id: document.getElementById("voyageSelect").value || null,
+      date: document.getElementById("date").value, amount, currency, exchange_rate,
+      expense_account: document.getElementById("expenseAccount").value,
+      against_type, against_ref
+    });
+    toast(`${billType === "Advance" ? "Advance bill" : "Vendor bill"} saved & posted${job_ids.length ? ` — linked to ${job_ids.length} job(s)` : ""}`, "success");
+    document.getElementById("vendor").value=""; document.getElementById("billNo").value=""; document.getElementById("amount").value="";
+    document.getElementById("billCurrency").value = "AED"; onCurrencyChange();
+    try { const { preview } = await api("GET", "/api/payables/next-no"); document.getElementById("billNo").placeholder = `Auto: ${preview}`; } catch(e) {}
+    await loadBills();
+    printBill(bill.id);
+  } catch(e){ toast(e.message, "error"); }
+};
+let allBills = [];
+let accountsCache = [];
+window.openEditBillModal = (id) => {
+  const bill = allBills.find(b => b.id === id);
+  const root = document.getElementById("modalRoot");
+  root.innerHTML = `
+    <div class="modal-backdrop">
+      <div class="modal" style="max-width:520px;">
+        <h3>Edit Bill ${bill.bill_no}</h3>
+        <p class="sub">Currency and exchange rate are fixed once posted — delete and re-enter if those need to change.</p>
+        <div class="grid">
+          <div class="field"><label>Vendor *</label><input id="ebVendor" value="${esc(bill.vendor)}"></div>
+          <div class="field"><label>Bill #</label><input id="ebBillNo" value="${esc(bill.bill_no)}"></div>
+          <div class="field"><label>Date</label><input type="date" id="ebDate" value="${bill.date}"></div>
+          <div class="field"><label>Bill Type</label><select id="ebBillType"><option value="Regular" ${bill.bill_type==='Regular'?'selected':''}>Regular</option><option value="Advance" ${bill.bill_type==='Advance'?'selected':''}>Advance</option></select></div>
+          <div class="field"><label>Amount * <span class="sub" style="font-weight:400;">(${bill.currency}, fixed @ ${bill.exchange_rate})</span></label><input type="number" id="ebAmount" step="0.01" value="${bill.amount}"></div>
+          <div class="field"><label>Cost Account</label><select id="ebExpenseAccount">${accountsCache.filter(a=>a.type==="Expense").map(a=>`<option value="${a.code}" ${a.code===bill.expense_account?'selected':''}>${a.code} — ${esc(a.name)}</option>`).join("")}</select></div>
+          <div class="field" style="grid-column:span 2;"><label>Against / Description</label><input id="ebAgainstRef" value="${esc(bill.against_ref)}"></div>
+        </div>
+        <div class="btn-row" style="margin-top:0;"><button class="btn" id="ebCancel">Cancel</button><button class="btn btn-violet" id="ebSave">Save Changes</button></div>
+      </div>
+    </div>`;
+  document.getElementById("ebCancel").onclick = () => { root.innerHTML = ""; };
+  document.getElementById("ebSave").onclick = async () => {
+    try {
+      await api("PUT", `/api/payables/${id}`, {
+        vendor: document.getElementById("ebVendor").value.trim(),
+        bill_no: document.getElementById("ebBillNo").value.trim(),
+        date: document.getElementById("ebDate").value,
+        bill_type: document.getElementById("ebBillType").value,
+        amount: Number(document.getElementById("ebAmount").value),
+        expense_account: document.getElementById("ebExpenseAccount").value,
+        against_ref: document.getElementById("ebAgainstRef").value.trim(),
+      });
+      toast("Bill updated", "success");
+      root.innerHTML = "";
+      loadBills();
+    } catch(e){ toast(e.message, "error"); }
+  };
+};
+window.deleteBill = async (id) => {
+  const bill = allBills.find(b => b.id === id);
+  const reason = await confirmWithReason("Delete Bill", `This reverses ${bill.bill_no}'s ledger entry. This can't be undone.`);
+  if (!reason) return;
+  try { await api("DELETE", `/api/payables/${id}`, { reason }); toast("Bill deleted", "success"); loadBills(); }
+  catch(e){ toast(e.message, "error"); }
+};
+window.printBill = async (id) => {
+  const bill = allBills.find(b => b.id === id);
+  const jobsLabel = (bill.jobs && bill.jobs.length) ? bill.jobs.map(j=>j.job_no).join(", ") : "—";
+  const company = await getCompanyProfile();
+  const win = window.open("", "_blank");
+  win.document.write(`
+    <html><head><title>Bill ${bill.bill_no}</title>
+    <style>body{font-family:Arial,sans-serif;color:#1C2A36;padding:36px;max-width:640px;margin:0 auto;}
+    table{width:100%;border-collapse:collapse;margin-top:16px;font-size:13px;}
+    td{padding:8px 0;border-bottom:1px solid #E5E9EC;} td:first-child{color:#5B6B78;width:170px;}
+    .total{font-size:16px;font-weight:700;margin-top:16px;}</style></head>
+    <body>
+      ${letterheadHtml(company, `Vendor Bill${bill.bill_type==='Advance'?' (Advance)':''}`, bill.bill_no)}
+      <table>
+        <tr><td>Vendor</td><td>${esc(bill.vendor)}</td></tr>
+        <tr><td>Date</td><td>${bill.date}</td></tr>
+        <tr><td>Against</td><td>${esc(bill.against_ref)||"—"}</td></tr>
+        <tr><td>Job(s)</td><td>${jobsLabel}</td></tr>
+        <tr><td>Currency</td><td>${bill.currency}${bill.currency!=='AED'?` @ ${bill.exchange_rate} = AED ${fmt(bill.base_amount)}`:''}</td></tr>
+        <tr><td>Paid</td><td>${fmt(bill.settled_amount)}</td></tr>
+        <tr><td>Outstanding</td><td>${fmt(bill.amount-bill.settled_amount)}</td></tr>
+      </table>
+      <div class="total">Amount: ${bill.currency} ${fmt(bill.amount)}</div>
+      <div style="margin-top:60px;font-size:12px;">Authorized By: ____________________</div>
+      ${letterheadFooterHtml(company)}
+    </body></html>`);
+  win.document.close(); win.focus();
+  setTimeout(() => win.print(), 300);
+};
+function openPaymentModal(id, outstanding) {
+  const bill = allBills.find(b => b.id === id);
+  const root = document.getElementById("modalRoot");
+  root.innerHTML = `
+    <div class="modal-backdrop">
+      <div class="modal">
+        <h3>Record Payment</h3>
+        <p class="sub">Against bill <b class="mono">${bill.bill_no}</b> — ${esc(bill.vendor)}</p>
+        <div class="field" style="margin-bottom:12px;"><label>Date</label><input type="date" id="pmDate" value="${new Date().toISOString().slice(0,10)}"></div>
+        <div class="field" style="margin-bottom:12px;"><label>Amount * <span class="sub" style="font-weight:400;">(outstanding ${fmt(outstanding)})</span></label><input type="number" id="pmAmount" step="0.01" value="${outstanding}"></div>
+        <div class="field" style="margin-bottom:12px;"><label>Pay From (Bank/Cash Account) *</label>
+          <select id="pmBank">${bankAccounts.map(a=>`<option value="${a.code}">${a.code} — ${a.name}</option>`).join("")}</select>
+        </div>
+        <div class="field" style="margin-bottom:12px;"><label>Payment Mode *</label>
+          <select id="pmMode" onchange="onPmModeChange()"><option value="Cash">Cash</option><option value="Online">Online</option><option value="Cheque">Cheque</option></select>
+        </div>
+        <div id="pmModeExtra" style="margin-bottom:16px;"></div>
+        <div class="btn-row" style="margin-top:0;"><button class="btn" id="pmCancel">Cancel</button><button class="btn btn-violet" id="pmSave">Save Payment</button></div>
+      </div>
+    </div>`;
+  window.onPmModeChange = () => {
+    const mode = document.getElementById("pmMode").value;
+    const box = document.getElementById("pmModeExtra");
+    if (mode === "Cash") box.innerHTML = `<div class="field"><label>Narration <span class="sub" style="font-weight:400;">(optional)</span></label><input id="pmNarration" placeholder="e.g. Paid in cash"></div>`;
+    else if (mode === "Online") box.innerHTML = `<div class="field"><label>Transaction Number *</label><input id="pmRef" placeholder="e.g. FT26123456789"></div>`;
+    else box.innerHTML = `<div class="field"><label>Cheque Number *</label><input id="pmRef" placeholder="e.g. 000456"></div>`;
+  };
+  onPmModeChange();
+  document.getElementById("pmCancel").onclick = () => { root.innerHTML = ""; };
+  document.getElementById("pmSave").onclick = async () => {
+    const amount = Number(document.getElementById("pmAmount").value);
+    if (!amount || amount <= 0) return toast("Enter a valid amount", "error");
+    const mode = document.getElementById("pmMode").value;
+    const refEl = document.getElementById("pmRef");
+    const narrEl = document.getElementById("pmNarration");
+    if (refEl && !refEl.value.trim()) return toast(`Enter the ${mode === "Online" ? "transaction number" : "cheque number"}`, "error");
+    try {
+      await api("POST", `/api/payables/${id}/payment`, {
+        amount, bank_account: document.getElementById("pmBank").value,
+        date: document.getElementById("pmDate").value,
+        payment_mode: mode,
+        reference_no: refEl ? refEl.value.trim() : "",
+        narration: narrEl ? narrEl.value.trim() : "",
+      });
+      toast("Payment posted", "success");
+      root.innerHTML = "";
+      loadBills();
+    } catch(e){ toast(e.message, "error"); }
+  };
+}
+window.recordPayment = async (id, outstanding) => {
+  if (!bankAccounts.length) bankAccounts = (await api("GET","/api/accounts")).filter(a=>a.type==="Asset" && a.code!=="1000");
+  openPaymentModal(id, outstanding);
+};
+init();
+</script>
+</body>
+</html>

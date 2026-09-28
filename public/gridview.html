@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Grid View — Harbor Desk</title><link rel="stylesheet" href="/css/style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  .gv-colpicker{display:flex;flex-wrap:wrap;gap:6px 14px;background:#F7F8F9;border:1px solid var(--line);border-radius:8px;padding:10px 14px;margin-bottom:14px;}
+  .gv-colpicker label{display:flex;align-items:center;gap:5px;font-size:12.5px;white-space:nowrap;}
+  .gv-table-wrap{overflow:auto;max-height:70vh;border:1px solid var(--line);border-radius:8px;}
+  .gv-table-wrap table{margin:0;}
+  .gv-table-wrap th{position:sticky;top:0;background:#1C2A36;color:#fff;z-index:1;}
+</style>
+</head>
+<body>
+<div class="topnav" id="topnav"></div>
+<div class="wrap">
+  <div class="panel">
+    <div style="display:flex;justify-content:space-between;flex-wrap:wrap;align-items:flex-start;gap:10px;">
+      <div><h2>Grid View</h2><p class="sub">Spreadsheet-style view of your data — pick a dataset, then add or remove columns as needed.</p></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <select id="datasetSelect" style="min-width:180px;"></select>
+        <button class="btn btn-sm" id="refreshBtn">↻ Refresh</button>
+        <button class="btn btn-sm btn-teal" id="exportBtn">⭳ Export</button>
+      </div>
+    </div>
+    <div id="colPicker" class="gv-colpicker"></div>
+    <div class="sub" id="rowCount" style="margin-bottom:8px;"></div>
+    <div class="gv-table-wrap"><table id="gvTable"></table></div>
+  </div>
+</div>
+<script src="/js/api.js"></script>
+<script>
+// Each dataset: endpoint + a list of every column it can show (label + key/value fn) + which
+// columns are shown by default. The user can tick/untick any column — Grid View remembers the
+// choice per dataset in localStorage so it stays how they left it next time.
+const DATASETS = {
+  jobs: {
+    label: "Jobs", endpoint: "/api/jobs",
+    columns: [
+      ["job_no","Job #"], ["job_date","Date"], ["direction","Direction"], ["client","Client"], ["shipper","Shipper"],
+      ["consignee","Consignee"], ["commodity","Commodity"], ["pol","POL"], ["pod","POD"], ["vessel_name","Vessel"],
+      ["voyage_no","Voyage"], ["etd","ETD"], ["eta","ETA"], ["booking_approved","Booking Approved"],
+      ["charges_approved","Charges Approved"], ["sales_rep","Sales Rep"], ["cost_center","Cost Center"],
+    ],
+    defaults: ["job_no","job_date","direction","client","pol","pod","booking_approved","charges_approved"],
+  },
+  parties: {
+    label: "Customers & Vendors", endpoint: "/api/parties",
+    columns: [
+      ["code","Code"], ["name","Name"], ["is_client","Client"], ["is_shipper","Shipper"], ["is_consignee","Consignee"],
+      ["is_vendor","Vendor"], ["agent_name","Agent"], ["trn","TRN"], ["trade_license","Trade License"],
+      ["email","Email"], ["address","Address"],
+    ],
+    defaults: ["code","name","is_client","is_vendor","trn","email"],
+  },
+  invoices: {
+    label: "Invoices", endpoint: "/api/receivables",
+    columns: [
+      ["txn","Invoice #"], ["job_no","Job #"], ["client","Client"], ["date","Date"], ["currency","Currency"],
+      ["amount","Amount"], ["settled_amount","Settled"], ["settled","Settled?"],
+    ],
+    defaults: ["txn","job_no","client","date","currency","amount","settled_amount"],
+  },
+  bills: {
+    label: "Vendor Bills", endpoint: "/api/payables",
+    columns: [
+      ["bill_no","Bill #"], ["vendor","Vendor"], ["date","Date"], ["currency","Currency"], ["amount","Amount"],
+      ["settled_amount","Settled"], ["settled","Settled?"], ["bill_type","Bill Type"], ["against_ref","Against"],
+      ["charge_ref","Charge Ref"],
+    ],
+    defaults: ["bill_no","vendor","date","currency","amount","settled_amount","bill_type"],
+  },
+  vouchers: {
+    label: "Vouchers", endpoint: "/api/vouchers",
+    columns: [["no","Voucher #"],["date","Date"],["source","Type"],["narration","Narration"],["payment_mode","Mode"],["reference_no","Reference #"]],
+    defaults: ["no","date","source","narration","payment_mode"],
+  },
+  credit_notes: {
+    label: "Credit Notes", endpoint: "/api/credit-notes",
+    columns: [["cn_no","CN #"],["client","Client"],["date","Date"],["amount","Amount"],["reason","Reason"]],
+    defaults: ["cn_no","client","date","amount","reason"],
+  },
+  debit_notes: {
+    label: "Debit Notes", endpoint: "/api/debit-notes",
+    columns: [["dn_no","DN #"],["vendor","Vendor"],["date","Date"],["amount","Amount"],["reason","Reason"]],
+    defaults: ["dn_no","vendor","date","amount","reason"],
+  },
+};
+
+let currentRows = [];
+let currentCols = [];
+
+function colStateKey(ds) { return `hd_gridview_cols_${ds}`; }
+function loadColState(ds, allKeys, defaults) {
+  try {
+    const saved = JSON.parse(localStorage.getItem(colStateKey(ds)) || "null");
+    if (saved && Array.isArray(saved)) return saved.filter(k => allKeys.includes(k));
+  } catch (e) {}
+  return defaults.slice();
+}
+function saveColState(ds, keys) {
+  try { localStorage.setItem(colStateKey(ds), JSON.stringify(keys)); } catch (e) {}
+}
+
+function renderColPicker(dsKey) {
+  const ds = DATASETS[dsKey];
+  const allKeys = ds.columns.map(c => c[0]);
+  currentCols = loadColState(dsKey, allKeys, ds.defaults);
+  document.getElementById("colPicker").innerHTML = ds.columns.map(([key,label]) => `
+    <label><input type="checkbox" data-key="${key}" ${currentCols.includes(key)?"checked":""}> ${esc(label)}</label>`).join("");
+  [...document.querySelectorAll("#colPicker input")].forEach(cb => {
+    cb.onchange = () => {
+      const key = cb.dataset.key;
+      if (cb.checked) { if (!currentCols.includes(key)) currentCols.push(key); }
+      else currentCols = currentCols.filter(k => k !== key);
+      saveColState(dsKey, currentCols);
+      renderTable(dsKey);
+    };
+  });
+}
+
+function fmtCell(v) {
+  if (v === null || v === undefined) return "";
+  if (v === 1 || v === true) return "✓";
+  if (v === 0 || v === false) return "";
+  return String(v);
+}
+
+function renderTable(dsKey) {
+  const ds = DATASETS[dsKey];
+  const colDefs = ds.columns.filter(c => currentCols.includes(c[0]));
+  const table = document.getElementById("gvTable");
+  table.innerHTML = `
+    <thead><tr>${colDefs.map(([,label]) => `<th>${esc(label)}</th>`).join("")}</tr></thead>
+    <tbody>${currentRows.map(r => `<tr>${colDefs.map(([key]) => `<td>${esc(fmtCell(r[key]))}</td>`).join("")}</tr>`).join("")
+      || `<tr><td colspan="${colDefs.length||1}"><div class="empty">No data yet.</div></td></tr>`}</tbody>`;
+  document.getElementById("rowCount").textContent = `${currentRows.length} row(s) — ${colDefs.length} column(s) shown`;
+}
+
+async function loadDataset(dsKey) {
+  const ds = DATASETS[dsKey];
+  renderColPicker(dsKey);
+  try { currentRows = await api("GET", ds.endpoint); }
+  catch (e) { currentRows = []; toast(e.message, "error"); }
+  renderTable(dsKey);
+}
+
+document.getElementById("datasetSelect").innerHTML = Object.entries(DATASETS).map(([k,v]) => `<option value="${k}">${esc(v.label)}</option>`).join("");
+document.getElementById("datasetSelect").onchange = (e) => loadDataset(e.target.value);
+document.getElementById("refreshBtn").onclick = () => loadDataset(document.getElementById("datasetSelect").value);
+document.getElementById("exportBtn").onclick = async () => {
+  const dsKey = document.getElementById("datasetSelect").value;
+  const ds = DATASETS[dsKey];
+  const colDefs = ds.columns.filter(c => currentCols.includes(c[0]));
+  const me = window._gvMe;
+  await exportRowsToExcel({
+    rows: currentRows,
+    columns: colDefs.map(([key,label]) => ({ key, label, sum: typeof (currentRows[0]||{})[key] === "number" })),
+    reportTitle: `${ds.label} — Grid View Export`,
+    fileName: `${dsKey}-gridview.xlsx`,
+    sheetName: ds.label.slice(0,30),
+    user: me ? me.name : "",
+  });
+};
+
+(async function init() {
+  const me = await renderTopNav("gridview.html");
+  window._gvMe = me;
+  loadDataset("jobs");
+})();
+</script>
+</body>
+</html>

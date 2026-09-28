@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Currency &amp; Exchange Rate — Harbor Desk</title><link rel="stylesheet" href="/css/style.css"></head>
+<body>
+<div class="topnav" id="topnav"></div>
+<div class="wrap">
+  <div class="panel">
+    <div style="display:flex;justify-content:space-between;flex-wrap:wrap;align-items:flex-start;">
+      <div><h2>Currency &amp; Exchange Rate</h2>
+        <p class="sub">Master list of currencies and their fixed exchange rate to AED (base currency). This is the lookup
+        source that pre-fills the rate whenever a currency is picked in Charges, Payable/Cost, Invoices or Bills — each
+        of those transactions still keeps its OWN rate once entered, so changing a rate here never moves an old posting.</p>
+      </div>
+      <button class="btn btn-sm btn-violet" id="newBtn">+ Add Currency / Exchange Rate</button>
+    </div>
+    <table><thead><tr><th>Code</th><th>Name</th><th class="num">Exchange Rate → AED</th><th>Applicable From</th><th>Notes</th><th></th></tr></thead>
+      <tbody id="rows"></tbody></table>
+  </div>
+</div>
+<div id="modalRoot"></div>
+<script src="/js/api.js"></script>
+<script>
+let allowDelete = false;
+let currencies = [];
+
+async function load() {
+  currencies = await api("GET", "/api/currencies");
+  document.getElementById("rows").innerHTML = currencies.map(c => `
+    <tr>
+      <td class="mono"><b>${esc(c.code)}</b>${c.code==="AED"?' <span class="badge badge-settled">Base</span>':''}</td>
+      <td>${esc(c.name)||"—"}</td>
+      <td class="num mono">${fmt(c.exchange_rate)}</td>
+      <td>${c.applicable_from||"—"}</td>
+      <td>${esc(c.notes)||"—"}</td>
+      <td>
+        <button class="btn btn-sm" onclick="openForm('${esc(c.code).replace(/'/g,"&#39;")}')">Edit</button>
+        ${(allowDelete && c.code!=="AED") ? `<button class="btn btn-sm" onclick="delCurrency('${esc(c.code).replace(/'/g,"&#39;")}')">✕</button>` : ""}
+      </td>
+    </tr>`).join("") || `<tr><td colspan="6"><div class="empty">No currencies yet — add one.</div></td></tr>`;
+}
+
+window.openForm = (code) => {
+  const existing = code ? currencies.find(c => c.code === code) : null;
+  const root = document.getElementById("modalRoot");
+  root.innerHTML = `
+    <div class="modal-backdrop">
+      <div class="modal">
+        <h3>${existing ? "Edit" : "Add"} Currency / Exchange Rate</h3>
+        <div class="field" style="margin-bottom:12px;"><label>Currency Code *</label>
+          <input id="curCode" class="mono" style="text-transform:uppercase;" maxlength="6" placeholder="e.g. USD" value="${existing?esc(existing.code):""}" ${existing?"disabled":""}></div>
+        <div class="field" style="margin-bottom:12px;"><label>Currency Name</label>
+          <input id="curName" placeholder="e.g. US Dollar" value="${existing?esc(existing.name||""):""}"></div>
+        <div class="field" style="margin-bottom:12px;"><label>Exchange Rate → AED *</label>
+          <input type="number" id="curRate" min="0" step="0.0001" value="${existing?existing.exchange_rate:""}"></div>
+        <div class="field" style="margin-bottom:12px;"><label>Applicable From</label>
+          <input type="date" id="curFrom" value="${existing?existing.applicable_from||"":new Date().toISOString().slice(0,10)}"></div>
+        <div class="field" style="margin-bottom:16px;"><label>Notes / Applicable To <span class="sub" style="font-weight:400;">(optional — e.g. which jobs/branch this applies to)</span></label>
+          <input id="curNotes" value="${existing?esc(existing.notes||""):""}"></div>
+        <div class="btn-row" style="margin-top:0;"><button class="btn" id="curCancel">Cancel</button><button class="btn btn-violet" id="curSave">Save</button></div>
+      </div>
+    </div>`;
+  document.getElementById("curCancel").onclick = () => { root.innerHTML = ""; };
+  document.getElementById("curSave").onclick = async () => {
+    const payload = {
+      code: document.getElementById("curCode").value.trim().toUpperCase(),
+      name: document.getElementById("curName").value.trim(),
+      exchange_rate: Number(document.getElementById("curRate").value),
+      applicable_from: document.getElementById("curFrom").value,
+      notes: document.getElementById("curNotes").value.trim(),
+    };
+    if (!payload.code) return toast("Enter a currency code", "error");
+    if (!payload.exchange_rate || payload.exchange_rate <= 0) return toast("Enter a valid exchange rate", "error");
+    try {
+      if (existing) await api("PUT", `/api/currencies/${existing.code}`, payload);
+      else await api("POST", "/api/currencies", payload);
+      toast("Saved", "success");
+      root.innerHTML = "";
+      load();
+    } catch (e) { toast(e.message, "error"); }
+  };
+};
+window.delCurrency = async (code) => {
+  const reason = await confirmWithReason("Delete Currency", `Delete "${code}" from the exchange rate master list?`);
+  if (!reason) return;
+  try { await api("DELETE", `/api/currencies/${code}`, { reason }); toast("Deleted", "success"); load(); }
+  catch (e) { toast(e.message, "error"); }
+};
+document.getElementById("newBtn").onclick = () => openForm(null);
+
+(async function init() {
+  const me = await renderTopNav("admin/currencies.html");
+  allowDelete = canDelete(me);
+  load();
+})();
+</script>
+</body>
+</html>

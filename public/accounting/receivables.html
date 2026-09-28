@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Receivables — Harbor Desk</title><link rel="stylesheet" href="/css/style.css"></head>
+<body>
+<div class="topnav" id="topnav"></div>
+<div class="wrap">
+  <div class="panel">
+    <h2>Client Receipt</h2>
+    <p class="sub">Pick a client to see their agent, invoices and running balance, then post a receipt against any invoice.</p>
+    <div class="grid" style="margin-bottom:14px;">
+      <div class="field"><label>Client</label>
+        <div class="ac-wrap"><input id="crClient" placeholder="Start typing a client name..."></div>
+      </div>
+      <div class="field"><label>Agent</label><input id="crAgent" disabled placeholder="— Select a client —"></div>
+    </div>
+    <div id="crSummary" style="display:none;">
+      <div class="btn-row" style="background:#F7F8F9;padding:12px 16px;border-radius:8px;border:1px solid var(--line);margin-top:0;">
+        <div>Total Invoiced: <b class="mono" id="crInvoiced">0.00</b></div>
+        <div>Total Received: <b class="mono" id="crReceived">0.00</b></div>
+        <div>Balance Outstanding: <b class="mono" id="crBalance">0.00</b></div>
+      </div>
+      <table><thead><tr><th>Invoice #</th><th>Job #</th><th>Date</th><th class="num">Amount</th><th class="num">Received</th><th class="num">Outstanding</th><th class="num">Days Outstanding</th><th>Status</th><th></th></tr></thead>
+        <tbody id="crRows"></tbody></table>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div style="display:flex;justify-content:space-between;flex-wrap:wrap;align-items:flex-end;">
+      <h2>Receivables — Customer Side</h2>
+      <button class="btn btn-sm" onclick="window.print()">🖨 Print</button>
+    </div>
+    <p class="sub">Invoices generated from Sea Export jobs.</p>
+    <table><thead><tr><th>Invoice #</th><th>Job #</th><th>Client</th><th>Date</th><th class="num">Amount</th><th class="num">Received</th><th class="num">Outstanding</th><th class="num">Days Outstanding</th><th>Status</th><th></th></tr></thead>
+      <tbody id="rows"></tbody></table>
+  </div>
+</div>
+<div id="modalRoot"></div>
+<script src="/js/api.js"></script>
+<script>
+renderTopNav("accounting/receivables.html");
+let bankAccounts = [];
+let allInvoices = [];
+let parties = [];
+
+function daysSince(dateStr) {
+  if (!dateStr) return 0;
+  const d = new Date(dateStr + "T00:00:00");
+  return Math.max(0, Math.floor((new Date() - d) / (1000 * 60 * 60 * 24)));
+}
+function daysCell(inv) {
+  const outstanding = inv.amount - inv.settled_amount;
+  if (outstanding <= 0.01) return `<span class="sub">—</span>`;
+  const days = daysSince(inv.date);
+  const color = days > 60 ? "#C1442D" : days > 30 ? "#B8860B" : "var(--text)";
+  return `<b style="color:${color};">${days}</b>`;
+}
+
+async function load() {
+  allInvoices = await api("GET", "/api/receivables");
+  document.getElementById("rows").innerHTML = allInvoices.map(i => {
+    const outstanding = i.amount - i.settled_amount;
+    return `<tr>
+      <td class="mono">${i.txn}</td><td class="mono">${i.job_no}</td><td>${esc(i.client)}</td><td>${i.date}</td>
+      <td class="num mono">${fmt(i.amount)}</td><td class="num mono">${fmt(i.settled_amount)}</td><td class="num mono">${fmt(outstanding)}</td>
+      <td class="num mono">${daysCell(i)}</td>
+      <td><span class="badge ${i.settled?'badge-settled':'badge-unsettled'}">${i.settled?'Settled':'Unsettled'}</span></td>
+      <td>${i.settled ? "" : `<button class="btn btn-sm btn-teal" onclick="recordReceipt(${i.id},${outstanding})">Record Receipt</button>`}</td>
+    </tr>`;
+  }).join("") || `<tr><td colspan="10"><div class="empty">No invoices yet.</div></td></tr>`;
+}
+
+function renderClientSummary(clientName) {
+  const rows = allInvoices.filter(i => i.client === clientName);
+  const box = document.getElementById("crSummary");
+  if (!clientName || !rows.length) { box.style.display = "none"; return; }
+  box.style.display = "block";
+  const invoiced = rows.reduce((s,i)=>s+i.amount,0);
+  const received = rows.reduce((s,i)=>s+i.settled_amount,0);
+  document.getElementById("crInvoiced").textContent = fmt(invoiced);
+  document.getElementById("crReceived").textContent = fmt(received);
+  document.getElementById("crBalance").textContent = fmt(invoiced-received);
+  document.getElementById("crRows").innerHTML = rows.map(i => {
+    const outstanding = i.amount - i.settled_amount;
+    return `<tr><td class="mono">${i.txn}</td><td class="mono">${i.job_no}</td><td>${i.date}</td>
+      <td class="num mono">${fmt(i.amount)}</td><td class="num mono">${fmt(i.settled_amount)}</td><td class="num mono">${fmt(outstanding)}</td>
+      <td class="num mono">${daysCell(i)}</td>
+      <td><span class="badge ${i.settled?'badge-settled':'badge-unsettled'}">${i.settled?'Settled':'Unsettled'}</span></td>
+      <td>${i.settled ? "" : `<button class="btn btn-sm btn-teal" onclick="recordReceipt(${i.id},${outstanding})">Record Receipt</button>`}</td></tr>`;
+  }).join("");
+}
+
+document.getElementById("crClient").addEventListener("input", () => {
+  const name = document.getElementById("crClient").value.trim();
+  const p = parties.find(p => p.name.toLowerCase() === name.toLowerCase());
+  document.getElementById("crAgent").value = p ? (p.agent_name || "No agent set for this client") : "";
+  renderClientSummary(name);
+});
+
+function openReceiptModal(id, outstanding) {
+  const inv = allInvoices.find(i => i.id === id);
+  const root = document.getElementById("modalRoot");
+  root.innerHTML = `
+    <div class="modal-backdrop">
+      <div class="modal">
+        <h3>Record Receipt</h3>
+        <p class="sub">Against invoice <b class="mono">${inv.txn}</b> — ${esc(inv.client)}</p>
+        <div class="field" style="margin-bottom:12px;"><label>Date</label><input type="date" id="rcDate" value="${new Date().toISOString().slice(0,10)}"></div>
+        <div class="field" style="margin-bottom:12px;"><label>Amount * <span class="sub" style="font-weight:400;">(outstanding ${fmt(outstanding)})</span></label><input type="number" id="rcAmount" step="0.01" value="${outstanding}"></div>
+        <div class="field" style="margin-bottom:12px;"><label>Deposit To (Bank/Cash Account) *</label>
+          <select id="rcBank">${bankAccounts.map(a=>`<option value="${a.code}">${a.code} — ${a.name}</option>`).join("")}</select>
+        </div>
+        <div class="field" style="margin-bottom:12px;"><label>Payment Mode *</label>
+          <select id="rcMode" onchange="onRcModeChange()"><option value="Cash">Cash</option><option value="Online">Online</option><option value="Cheque">Cheque</option></select>
+        </div>
+        <div id="rcModeExtra" style="margin-bottom:16px;"></div>
+        <div class="btn-row" style="margin-top:0;"><button class="btn" id="rcCancel">Cancel</button><button class="btn btn-teal" id="rcSave">Save Receipt</button></div>
+      </div>
+    </div>`;
+  window.onRcModeChange = () => {
+    const mode = document.getElementById("rcMode").value;
+    const box = document.getElementById("rcModeExtra");
+    if (mode === "Cash") box.innerHTML = `<div class="field"><label>Narration <span class="sub" style="font-weight:400;">(optional)</span></label><input id="rcNarration" placeholder="e.g. Cash received at counter"></div>`;
+    else if (mode === "Online") box.innerHTML = `<div class="field"><label>Transaction Number *</label><input id="rcRef" placeholder="e.g. FT26123456789"></div>`;
+    else box.innerHTML = `<div class="field"><label>Cheque Number *</label><input id="rcRef" placeholder="e.g. 000123"></div>`;
+  };
+  onRcModeChange();
+  document.getElementById("rcCancel").onclick = () => { root.innerHTML = ""; };
+  document.getElementById("rcSave").onclick = async () => {
+    const amount = Number(document.getElementById("rcAmount").value);
+    if (!amount || amount <= 0) return toast("Enter a valid amount", "error");
+    const mode = document.getElementById("rcMode").value;
+    const refEl = document.getElementById("rcRef");
+    const narrEl = document.getElementById("rcNarration");
+    if (refEl && !refEl.value.trim()) return toast(`Enter the ${mode === "Online" ? "transaction number" : "cheque number"}`, "error");
+    try {
+      await api("POST", `/api/receivables/${id}/receipt`, {
+        amount, bank_account: document.getElementById("rcBank").value,
+        date: document.getElementById("rcDate").value,
+        payment_mode: mode,
+        reference_no: refEl ? refEl.value.trim() : "",
+        narration: narrEl ? narrEl.value.trim() : "",
+      });
+      toast("Receipt posted", "success");
+      root.innerHTML = "";
+      await load();
+      renderClientSummary(document.getElementById("crClient").value.trim());
+    } catch(e){ toast(e.message, "error"); }
+  };
+}
+window.recordReceipt = async (id, outstanding) => {
+  if (!bankAccounts.length) bankAccounts = (await api("GET","/api/accounts")).filter(a=>a.type==="Asset" && a.code!=="1000");
+  openReceiptModal(id, outstanding);
+};
+
+(async function init() {
+  parties = await api("GET", "/api/parties");
+  attachAutocomplete(document.getElementById("crClient"), () => parties.map(p => ({ label: p.name, sub: p.agent_name ? `Agent: ${p.agent_name}` : "" })), (item) => {
+    const p = parties.find(p => p.name === item.label);
+    document.getElementById("crAgent").value = p && p.agent_name ? p.agent_name : "No agent set for this client";
+    renderClientSummary(item.label);
+  });
+  await load();
+})();
+</script>
+</body>
+</html>

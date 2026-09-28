@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Cash Flow Statement — Harbor Desk</title><link rel="stylesheet" href="/css/style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+</head>
+<body>
+<div class="topnav" id="topnav"></div>
+<div class="wrap">
+  <div class="panel">
+    <div style="display:flex;justify-content:space-between;flex-wrap:wrap;align-items:flex-end;gap:12px;">
+      <div><h2>Cash Flow Statement</h2><p class="sub">Movement through Cash &amp; Bank accounts for the period — grouped by receipts, payments, and other entries.</p></div>
+      <div style="display:flex;gap:8px;align-items:flex-end;">
+        <div class="field"><label>From</label><input type="date" id="fromDate"></div>
+        <div class="field"><label>To</label><input type="date" id="toDate"></div>
+        <button class="btn btn-sm" id="runBtn">Run</button>
+        <button class="btn btn-sm" id="exportBtn">⬇ Export to Excel</button>
+        <button class="btn btn-sm" onclick="window.print()">🖨 Print</button>
+      </div>
+    </div>
+    <div class="btn-row" style="background:#F7F8F9;padding:12px 16px;border-radius:8px;border:1px solid var(--line);" id="summaryBox"></div>
+    <table><thead><tr><th>Category</th><th class="num">Inflow</th><th class="num">Outflow</th><th class="num">Net</th></tr></thead>
+      <tbody id="rows"></tbody>
+      <tfoot><tr style="font-weight:700;background:#F7F8F9;"><td>Net Movement</td><td></td><td></td><td class="num mono" id="netTotal"></td></tr></tfoot>
+    </table>
+  </div>
+</div>
+<script src="/js/api.js"></script>
+<script>
+renderTopNav("reports/cash-flow.html");
+let lastData = null;
+function firstOfYear() { return `${new Date().getFullYear()}-01-01`; }
+function today() { return new Date().toISOString().slice(0,10); }
+
+async function run() {
+  const from = document.getElementById("fromDate").value;
+  const to = document.getElementById("toDate").value;
+  const data = await api("GET", `/api/reports/cash-flow?from=${from}&to=${to}`);
+  lastData = data;
+  document.getElementById("rows").innerHTML = data.byCategory.map(c => `
+    <tr><td>${c.label}</td><td class="num mono">${c.inflow?fmt(c.inflow):""}</td><td class="num mono">${c.outflow?fmt(c.outflow):""}</td>
+      <td class="num mono" style="color:${c.net>=0?'#1F8A5F':'#C1442D'};">${fmt(c.net)}</td></tr>`).join("")
+    || `<tr><td colspan="4"><div class="empty">No cash movement in this period.</div></td></tr>`;
+  document.getElementById("netTotal").textContent = fmt(data.netMovement);
+  document.getElementById("summaryBox").innerHTML = `
+    <div>Opening Cash &amp; Bank: <b class="mono">${fmt(data.opening)}</b></div>
+    <div>Net Movement: <b class="mono" style="color:${data.netMovement>=0?'#1F8A5F':'#C1442D'};">${fmt(data.netMovement)}</b></div>
+    <div>Closing Cash &amp; Bank: <b class="mono">${fmt(data.closing)}</b></div>
+    <div class="sub">Accounts included: ${data.accounts.map(a=>a.name).join(", ")}</div>`;
+}
+document.getElementById("runBtn").onclick = run;
+document.getElementById("exportBtn").onclick = () => {
+  if (!lastData) return;
+  const rows = lastData.byCategory.map(c => ({ Category: c.label, Inflow: c.inflow, Outflow: c.outflow, Net: c.net }));
+  rows.unshift({ Category: `Opening Cash & Bank (${lastData.from})`, Inflow: "", Outflow: "", Net: lastData.opening });
+  rows.push({ Category: `Closing Cash & Bank (${lastData.to})`, Inflow: "", Outflow: "", Net: lastData.closing });
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Cash Flow");
+  XLSX.writeFile(wb, `cash-flow-${lastData.from}-to-${lastData.to}.xlsx`);
+};
+(function init() {
+  document.getElementById("fromDate").value = firstOfYear();
+  document.getElementById("toDate").value = today();
+  run();
+})();
+</script>
+</body>
+</html>

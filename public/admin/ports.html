@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Ports — Harbor Desk</title><link rel="stylesheet" href="/css/style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script></head>
+<body>
+<div class="topnav" id="topnav"></div>
+<div class="wrap">
+  <div class="panel">
+    <div style="display:flex;justify-content:space-between;flex-wrap:wrap;">
+      <div><h2>Ports</h2><p class="sub">Worldwide port master used for Port of Loading / Discharge / Final Destination in Booking Info. Comes pre-loaded with ~100 major ports.</p></div>
+      <button class="btn btn-sm btn-violet" id="newBtn">+ New Port</button>
+    </div>
+    <input id="search" placeholder="Search ports..." style="margin-bottom:12px;">
+    <table><thead><tr><th>Name</th><th>Country</th><th>UN/LOCODE</th><th></th></tr></thead><tbody id="rows"></tbody></table>
+  </div>
+
+  <div class="panel">
+    <h2>Bulk Upload — Excel</h2>
+    <p class="sub">Download the template, fill it in, then upload — no need to type anything here.</p>
+    <div class="btn-row" style="margin-top:0;">
+      <button class="btn btn-sm" id="downloadTemplateBtn">⬇ Download Template</button>
+      <input type="file" id="excelFile" accept=".xlsx,.xls,.csv" style="max-width:260px;">
+      <button class="btn btn-sm btn-primary" id="excelUploadBtn">Upload Excel</button>
+    </div>
+    <div id="excelResult"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Bulk Upload — Paste Text</h2>
+    <p class="sub">Paste one port per line: Name, Country, UN/LOCODE (comma or tab separated). LOCODE is optional.</p>
+    <textarea id="bulkText" rows="6" placeholder="NHAVA SHEVA, INDIA, INNSA
+CHATTOGRAM, BANGLADESH, BDCGP"></textarea>
+    <div class="btn-row"><button class="btn btn-primary" id="bulkBtn">Add All</button></div>
+    <div id="bulkResult"></div>
+  </div>
+</div>
+<script src="/js/api.js"></script>
+<script>
+let allowDelete = false;
+let allPorts = [];
+function render(list) {
+  document.getElementById("rows").innerHTML = list.map(p => `
+    <tr><td>${esc(p.name)}</td><td>${esc(p.country)||"—"}</td><td class="mono">${esc(p.locode)||"—"}</td>
+      <td>${allowDelete ? `<button class="btn btn-sm" onclick="delItem(${p.id})">✕</button>` : ""}</td></tr>`).join("")
+    || `<tr><td colspan="4"><div class="empty">No ports found.</div></td></tr>`;
+}
+async function load() {
+  allPorts = await api("GET", "/api/ports");
+  render(allPorts);
+}
+document.getElementById("search").oninput = (e) => {
+  const q = e.target.value.toLowerCase();
+  render(allPorts.filter(p => p.name.toLowerCase().includes(q) || (p.country||"").toLowerCase().includes(q) || (p.locode||"").toLowerCase().includes(q)));
+};
+document.getElementById("newBtn").onclick = async () => {
+  const name = prompt("Port name:"); if (!name) return;
+  const country = prompt("Country:", "");
+  const locode = prompt("UN/LOCODE (optional, e.g. AEJEA):", "");
+  try { await api("POST", "/api/ports", { name, country, locode }); toast("Port added","success"); load(); }
+  catch(e){ toast(e.message,"error"); }
+};
+window.delItem = async (id) => {
+  if (!confirm("Delete this port?")) return;
+  try { await api("DELETE", `/api/ports/${id}`); toast("Deleted","success"); load(); }
+  catch(e){ toast(e.message,"error"); }
+};
+document.getElementById("bulkBtn").onclick = async () => {
+  const lines = document.getElementById("bulkText").value.split("\n").map(s=>s.trim()).filter(Boolean);
+  const rows = lines.map(line => {
+    const p = line.split(/\t|,/).map(x=>x.trim());
+    return { name: p[0]||"", country: p[1]||"", locode: p[2]||"" };
+  }).filter(r=>r.name);
+  if (!rows.length) return toast("Paste at least one port line", "error");
+  const result = await api("POST", "/api/ports/bulk", { rows });
+  document.getElementById("bulkResult").innerHTML = `<div class="empty" style="border-style:solid;">Added ${result.added}, skipped ${result.skipped} duplicate(s).</div>`;
+  document.getElementById("bulkText").value = "";
+  toast("Bulk upload complete", "success");
+  load();
+};
+
+document.getElementById("downloadTemplateBtn").onclick = () => {
+  const headers = ["Name", "Country", "UN/LOCODE (optional)"];
+  const sample = [["NHAVA SHEVA", "INDIA", "INNSA"], ["CHATTOGRAM", "BANGLADESH", "BDCGP"]];
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...sample]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Ports");
+  XLSX.writeFile(wb, "ports_template.xlsx");
+};
+function readSheet(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const wb = XLSX.read(new Uint8Array(e.target.result), { type: "array" });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        resolve(XLSX.utils.sheet_to_json(ws, { defval: "" }));
+      } catch (err) { reject(err); }
+    };
+    reader.onerror = reject;
+    reader.readAsArrayBuffer(file);
+  });
+}
+function getField(row, ...keys) {
+  const found = Object.keys(row).find(k => keys.includes(k.toLowerCase().trim()));
+  return found ? row[found] : "";
+}
+document.getElementById("excelUploadBtn").onclick = async () => {
+  const file = document.getElementById("excelFile").files[0];
+  if (!file) return toast("Choose a file first", "error");
+  const json = await readSheet(file);
+  const rows = json.map(r => ({
+    name: String(getField(r, "name")).trim(),
+    country: String(getField(r, "country")).trim(),
+    locode: String(getField(r, "un/locode (optional)", "un/locode", "locode")).trim(),
+  })).filter(r => r.name);
+  if (!rows.length) return toast("No valid rows found", "error");
+  try {
+    const result = await api("POST", "/api/ports/bulk", { rows });
+    document.getElementById("excelResult").innerHTML = `<div class="empty" style="border-style:solid;">Added ${result.added}, skipped ${result.skipped} duplicate(s).</div>`;
+    toast("Excel upload complete", "success");
+    load();
+  } catch(e){ toast(e.message, "error"); }
+};
+(async function init() {
+  const me = await renderTopNav("admin/ports.html");
+  allowDelete = canDelete(me);
+  load();
+})();
+</script>
+</body>
+</html>

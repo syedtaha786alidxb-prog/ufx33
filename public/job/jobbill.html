@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Job Bill — Harbor Desk</title><link rel="stylesheet" href="/css/style.css"></head>
+<body>
+<div class="topnav no-print" id="topnav"></div>
+<div class="wrap">
+  <div class="panel no-print">
+    <h2>Find a Vendor's Bills</h2>
+    <p class="sub">Select a vendor to see every bill generated for them (across all jobs) — pay directly from here.</p>
+    <div class="ac-wrap"><input id="vendorFinder" placeholder="Start typing a vendor name..." style="max-width:320px;"></div>
+    <div id="vendorBillsBox" style="margin-top:12px;"></div>
+  </div>
+
+  <div class="panel">
+    <h2>This Job's Bills — <span id="jobNoLabel" class="mono"></span></h2>
+    <div id="jobSearchBox"></div>
+    <p class="sub">Every bill generated (via "Generate Bill" in Booking Info) for the current job.</p>
+    <table><thead><tr><th>Bill #</th><th>Vendor</th><th>Description</th><th class="num">Amount</th><th class="num">Outstanding</th><th>Status</th><th></th></tr></thead>
+      <tbody id="jobBillRows"></tbody></table>
+  </div>
+</div>
+<div id="modalRoot"></div>
+<script src="/js/api.js"></script>
+<script>
+let jobId = getCurrentJobId();
+let allParties = [], allPayables = [], bankAccounts = [];
+
+async function loadJobBills() {
+  if (!jobId) { document.getElementById("jobBillRows").innerHTML = `<tr><td colspan="7"><div class="empty">No job selected — search or open a job first.</div></td></tr>`; return; }
+  const job = await api("GET", `/api/jobs/${jobId}`);
+  document.getElementById("jobNoLabel").textContent = job.job_no;
+  const bills = await api("GET", `/api/jobs/${jobId}/payables`);
+  document.getElementById("jobBillRows").innerHTML = renderBillRows(bills, loadJobBills);
+}
+function renderBillRows(bills, onPaid) {
+  return bills.map(b => {
+    const outstanding = b.amount - b.settled_amount;
+    return `<tr><td class="mono">${b.bill_no}${b.bill_type==='Advance'?' <span class="badge badge-unsettled">Advance</span>':''}</td><td>${esc(b.vendor)}</td><td>${esc(b.against_ref)||"—"}</td>
+      <td class="num mono">${fmt(b.amount)}${b.currency&&b.currency!=='AED'?` <span class="sub">${b.currency}</span>`:''}</td>
+      <td class="num mono">${fmt(outstanding)}</td>
+      <td><span class="badge ${b.settled?'badge-settled':'badge-unsettled'}">${b.settled?'Paid':'Unpaid'}</span></td>
+      <td>${b.settled ? "" : `<button class="btn btn-sm btn-violet" onclick='openPaymentModal(${b.id},${outstanding},${JSON.stringify(b.bill_no)},${JSON.stringify(b.vendor)},${onPaid===loadJobBills?"true":"false"})'>Pay</button>`}</td></tr>`;
+  }).join("") || `<tr><td colspan="7"><div class="empty">No bills yet.</div></td></tr>`;
+}
+
+async function loadVendorFinder() {
+  allParties = await api("GET", "/api/parties");
+  allPayables = await api("GET", "/api/payables");
+  attachAutocomplete(document.getElementById("vendorFinder"),
+    () => allParties.filter(p=>p.is_vendor).map(p => ({ label: p.name, sub: p.code||"" })),
+    (item) => renderVendorBills(item.label));
+  document.getElementById("vendorFinder").addEventListener("input", (e) => {
+    if (!e.target.value.trim()) document.getElementById("vendorBillsBox").innerHTML = "";
+  });
+}
+function renderVendorBills(vendorName) {
+  const rows = allPayables.filter(b => b.vendor && b.vendor.toLowerCase() === vendorName.toLowerCase());
+  const box = document.getElementById("vendorBillsBox");
+  if (!rows.length) { box.innerHTML = `<div class="empty">No bills found for ${esc(vendorName)} yet.</div>`; return; }
+  box.innerHTML = `<table><thead><tr><th>Bill #</th><th>Vendor</th><th>Description</th><th class="num">Amount</th><th class="num">Outstanding</th><th>Status</th><th></th></tr></thead>
+    <tbody>${renderBillRows(rows, () => renderVendorBills(vendorName))}</tbody></table>`;
+}
+
+window.openPaymentModal = async (id, outstanding, billNo, vendor, forJob) => {
+  if (!bankAccounts.length) bankAccounts = (await api("GET","/api/accounts")).filter(a=>a.type==="Asset" && a.code!=="1000");
+  const root = document.getElementById("modalRoot");
+  root.innerHTML = `
+    <div class="modal-backdrop">
+      <div class="modal">
+        <h3>Record Payment</h3>
+        <p class="sub">Against bill <b class="mono">${esc(billNo)}</b> — ${esc(vendor)}</p>
+        <div class="field" style="margin-bottom:12px;"><label>Date</label><input type="date" id="jbPmDate" value="${new Date().toISOString().slice(0,10)}"></div>
+        <div class="field" style="margin-bottom:12px;"><label>Amount * <span class="sub" style="font-weight:400;">(outstanding ${fmt(outstanding)})</span></label><input type="number" id="jbPmAmount" step="0.01" value="${outstanding}"></div>
+        <div class="field" style="margin-bottom:12px;"><label>Pay From (Bank/Cash Account) *</label>
+          <select id="jbPmBank">${bankAccounts.map(a=>`<option value="${a.code}">${a.code} — ${a.name}</option>`).join("")}</select>
+        </div>
+        <div class="field" style="margin-bottom:12px;"><label>Payment Mode *</label>
+          <select id="jbPmMode" onchange="onJbPmModeChange()"><option value="Cash">Cash</option><option value="Online">Online</option><option value="Cheque">Cheque</option></select>
+        </div>
+        <div id="jbPmModeExtra" style="margin-bottom:16px;"></div>
+        <div class="btn-row" style="margin-top:0;"><button class="btn" id="jbPmCancel">Cancel</button><button class="btn btn-violet" id="jbPmSave">Save Payment</button></div>
+      </div>
+    </div>`;
+  window.onJbPmModeChange = () => {
+    const mode = document.getElementById("jbPmMode").value;
+    const box = document.getElementById("jbPmModeExtra");
+    if (mode === "Cash") box.innerHTML = `<div class="field"><label>Narration <span class="sub" style="font-weight:400;">(optional)</span></label><input id="jbPmNarration" placeholder="e.g. Paid in cash"></div>`;
+    else if (mode === "Online") box.innerHTML = `<div class="field"><label>Transaction Number *</label><input id="jbPmRef" placeholder="e.g. FT26123456789"></div>`;
+    else box.innerHTML = `<div class="field"><label>Cheque Number *</label><input id="jbPmRef" placeholder="e.g. 000456"></div>`;
+  };
+  onJbPmModeChange();
+  document.getElementById("jbPmCancel").onclick = () => { root.innerHTML = ""; };
+  document.getElementById("jbPmSave").onclick = async () => {
+    const amount = Number(document.getElementById("jbPmAmount").value);
+    if (!amount || amount <= 0) return toast("Enter a valid amount", "error");
+    const mode = document.getElementById("jbPmMode").value;
+    const refEl = document.getElementById("jbPmRef");
+    const narrEl = document.getElementById("jbPmNarration");
+    if (refEl && !refEl.value.trim()) return toast(`Enter the ${mode === "Online" ? "transaction number" : "cheque number"}`, "error");
+    try {
+      await api("POST", `/api/payables/${id}/payment`, {
+        amount, bank_account: document.getElementById("jbPmBank").value,
+        date: document.getElementById("jbPmDate").value, payment_mode: mode,
+        reference_no: refEl ? refEl.value.trim() : "", narration: narrEl ? narrEl.value.trim() : "",
+      });
+      toast("Payment posted", "success");
+      root.innerHTML = "";
+      allPayables = await api("GET", "/api/payables");
+      loadJobBills();
+      const vname = document.getElementById("vendorFinder").value.trim();
+      if (vname) renderVendorBills(vname);
+    } catch(e){ toast(e.message, "error"); }
+  };
+};
+
+renderTopNav("job/jobbill.html");
+renderJobSearchBox("jobSearchBox", (j) => { setCurrentJobId(j.id); jobId = j.id; loadJobBills(); });
+loadVendorFinder();
+loadJobBills();
+</script>
+</body>
+</html>

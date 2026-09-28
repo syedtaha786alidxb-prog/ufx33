@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Users &amp; Access — Harbor Desk</title><link rel="stylesheet" href="/css/style.css">
+<style>
+  .modal-backdrop{position:fixed;inset:0;background:rgba(11,29,46,.55);display:flex;align-items:center;justify-content:center;z-index:60;padding:20px;overflow-y:auto;}
+  .modal{background:#fff;border-radius:10px;padding:24px 26px;max-width:440px;width:100%;margin:auto;}
+  .modal h3{margin:0 0 4px 0;font-size:16px;}
+  .modal p.sub{margin:0 0 18px 0;}
+  .checkbox-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:4px;}
+  .checkbox-row{display:flex;align-items:center;gap:8px;padding:6px 0;}
+  .checkbox-row input[type=checkbox]{width:auto;}
+  .checkbox-row label{font-size:13px;color:var(--text);font-weight:500;cursor:pointer;}
+</style>
+</head>
+<body>
+<div class="topnav" id="topnav"></div>
+<div class="wrap">
+  <div class="panel">
+    <div style="display:flex;justify-content:space-between;flex-wrap:wrap;">
+      <div><h2>Users &amp; Access Control</h2><p class="sub">Create user IDs, control which modules they can open, and whether they can delete records.</p></div>
+      <button class="btn btn-sm btn-violet" id="newUserBtn">+ New User</button>
+    </div>
+    <table><thead><tr><th>Name</th><th>Username</th><th>Role</th><th>Modules</th><th>Export/Import</th><th>Can Delete</th><th>Status</th><th></th></tr></thead>
+      <tbody id="rows"></tbody></table>
+  </div>
+</div>
+<div id="modalRoot"></div>
+<script src="/js/api.js"></script>
+<script>
+let allowDelete = false;
+async function load() {
+  const users = await api("GET", "/api/users");
+  document.getElementById("rows").innerHTML = users.map(u => `
+    <tr><td>${esc(u.name)}</td><td class="mono">${esc(u.username)}</td><td>${esc(u.role)}</td>
+      <td>${u.chatbot_only ? `<span class="badge badge-unsettled">🔒 Chatbot only</span>` : u.modules.split(",").map(m=>`<span class="badge badge-unsettled" style="margin-right:4px;">${m}</span>`).join("")}</td>
+      <td>${u.can_export?'<span class="badge badge-settled">Export</span>':''} ${u.can_import?'<span class="badge badge-unsettled">Import</span>':''}</td>
+      <td><span class="badge ${u.can_delete?'badge-settled':'badge-unsettled'}">${u.can_delete?'Yes':'No'}</span></td>
+      <td>
+        <span class="badge ${u.active?'badge-settled':'badge-unsettled'}">${u.active?'Active':'Inactive'}</span>
+        ${u.locked ? `<span class="badge badge-unsettled" style="background:#FBEAEA;color:#C1442D;margin-left:4px;" title="${u.failed_attempts} failed attempt(s)">🔒 Blocked</span>` : ""}
+      </td>
+      <td style="display:flex;gap:6px;flex-wrap:wrap;">
+        <button class="btn btn-sm" onclick="toggleUser(${u.id})">${u.active?'Deactivate':'Activate'}</button>
+        <button class="btn btn-sm btn-teal" onclick='openEditUserForm(${JSON.stringify(u).replace(/'/g,"&apos;")})'>Edit</button>
+        ${u.locked ? `<button class="btn btn-sm btn-primary" onclick="unlockUser(${u.id})">🔓 Unlock Account</button>` : ""}
+        ${allowDelete ? `<button class="btn btn-sm" onclick="toggleDelete(${u.id})">${u.can_delete?'Revoke Delete':'Grant Delete'}</button>
+        <button class="btn btn-sm" onclick="delUser(${u.id})">✕</button>` : ""}
+      </td></tr>`).join("") || `<tr><td colspan="8"><div class="empty">No users yet.</div></td></tr>`;
+}
+window.unlockUser = async (id) => {
+  try { await api("POST", `/api/users/${id}/unlock`); toast("Account unblocked", "success"); load(); }
+  catch(e){ toast(e.message, "error"); }
+};
+
+function openNewUserForm() {
+  const root = document.getElementById("modalRoot");
+  root.innerHTML = `
+    <div class="modal-backdrop" id="modalBackdrop">
+      <div class="modal">
+        <h3>New User</h3>
+        <p class="sub">Fill in the details, tick the access this person needs, then click Create.</p>
+
+        <div class="field" style="margin-bottom:12px;"><label>Full Name *</label><input id="nuName" placeholder="e.g. Ayesha Khan"></div>
+        <div class="field" style="margin-bottom:12px;"><label>Username *</label><input id="nuUsername" class="mono" placeholder="e.g. ayesha.khan"></div>
+        <div class="field" style="margin-bottom:12px;"><label>Password *</label><input id="nuPassword" type="text" placeholder="Minimum 4 characters"></div>
+        <div class="field" style="margin-bottom:16px;">
+          <label>Role</label>
+          <select id="nuRole"><option>Admin</option><option selected>Operations</option><option>Accounts</option><option>Sales</option></select>
+        </div>
+
+        <label style="font-size:12px;font-weight:600;color:var(--text-mute);display:block;margin-bottom:8px;">Module Access</label>
+        <div class="checkbox-grid">
+          <div class="checkbox-row"><input type="checkbox" id="modJob" checked><label for="modJob">Sea Export Job</label></div>
+          <div class="checkbox-row"><input type="checkbox" id="modAcct"><label for="modAcct">Accounting</label></div>
+          <div class="checkbox-row"><input type="checkbox" id="modAdmin"><label for="modAdmin">Admin</label></div>
+          <div class="checkbox-row"><input type="checkbox" id="modReports"><label for="modReports">Reports</label></div>
+          <div class="checkbox-row"><input type="checkbox" id="modChatbot"><label for="modChatbot">🤖 Chatbot</label></div>
+        </div>
+
+        <div class="checkbox-row" style="margin-top:10px;background:var(--gold-bg,#FDF2E3);border-radius:7px;padding:8px 10px;">
+          <input type="checkbox" id="chatbotOnlyBox">
+          <label for="chatbotOnlyBox">🔒 Restrict this user to ONLY the chatbot (they'll see nothing else — no Dashboard, no other modules)</label>
+        </div>
+
+        <label style="font-size:12px;font-weight:600;color:var(--text-mute);display:block;margin:16px 0 8px 0;">Permissions</label>
+        <div class="checkbox-row"><input type="checkbox" id="canDeleteBox"><label for="canDeleteBox">Allow this user to delete records (jobs, vessels, users, etc.)</label></div>
+        <div class="checkbox-row"><input type="checkbox" id="canExportBox" checked><label for="canExportBox">Can create/access Export jobs</label></div>
+        <div class="checkbox-row"><input type="checkbox" id="canImportBox"><label for="canImportBox">Can create/access Import jobs</label></div>
+        <div class="checkbox-row"><input type="checkbox" id="canApproveBox"><label for="canApproveBox">Can approve / un-approve Charges &amp; Cost</label></div>
+
+        <div class="btn-row">
+          <button class="btn" id="cancelNewUser">Cancel</button>
+          <button class="btn btn-violet" id="saveNewUser">Create User</button>
+        </div>
+      </div>
+    </div>`;
+  document.getElementById("cancelNewUser").onclick = () => { root.innerHTML = ""; };
+  document.getElementById("chatbotOnlyBox").onchange = (e) => {
+    const lock = e.target.checked;
+    ["modJob", "modAcct", "modAdmin", "modReports", "modChatbot"].forEach(id => {
+      const box = document.getElementById(id);
+      box.disabled = lock;
+      if (lock) box.checked = (id === "modChatbot");
+    });
+  };
+  document.getElementById("saveNewUser").onclick = async () => {
+    const name = document.getElementById("nuName").value.trim();
+    const username = document.getElementById("nuUsername").value.trim();
+    const password = document.getElementById("nuPassword").value;
+    const role = document.getElementById("nuRole").value;
+    const chatbot_only = document.getElementById("chatbotOnlyBox").checked;
+    const modules = [];
+    if (document.getElementById("modJob").checked) modules.push("job");
+    if (document.getElementById("modAcct").checked) modules.push("accounting");
+    if (document.getElementById("modAdmin").checked) modules.push("admin");
+    if (document.getElementById("modReports").checked) modules.push("reports");
+    if (document.getElementById("modChatbot").checked) modules.push("chatbot");
+    const can_delete = document.getElementById("canDeleteBox").checked;
+    const can_export = document.getElementById("canExportBox").checked;
+    const can_import = document.getElementById("canImportBox").checked;
+    const can_approve = document.getElementById("canApproveBox").checked;
+
+    if (!name) return toast("Enter a full name", "error");
+    if (!username) return toast("Enter a username", "error");
+    if (!password || password.length < 4) return toast("Password must be at least 4 characters", "error");
+    if (modules.length === 0 && !chatbot_only) return toast("Tick at least one module", "error");
+
+    try {
+      await api("POST", "/api/users", { name, username, password, role, modules, can_delete, can_export, can_import, can_approve, chatbot_only });
+      toast("User created", "success");
+      root.innerHTML = "";
+      load();
+    } catch (e) { toast(e.message, "error"); }
+  };
+}
+document.getElementById("newUserBtn").onclick = openNewUserForm;
+
+function openEditUserForm(u) {
+  const mods = (u.modules||"").split(",").filter(Boolean);
+  const root = document.getElementById("modalRoot");
+  root.innerHTML = `
+    <div class="modal-backdrop" id="modalBackdrop">
+      <div class="modal">
+        <h3>Edit User — ${u.username}</h3>
+        <p class="sub">Increase or reduce this person's rights. Leave password blank to keep it unchanged.</p>
+
+        <div class="field" style="margin-bottom:12px;"><label>Full Name *</label><input id="euName" value="${esc(u.name)}"></div>
+        <div class="field" style="margin-bottom:12px;"><label>New Password <span class="sub" style="font-weight:400;">(optional)</span></label><input id="euPassword" type="text" placeholder="Leave blank to keep current password"></div>
+        <div class="field" style="margin-bottom:16px;">
+          <label>Role</label>
+          <select id="euRole">
+            ${["Admin","Operations","Accounts","Sales"].map(r=>`<option ${r===u.role?"selected":""}>${r}</option>`).join("")}
+          </select>
+        </div>
+
+        <label style="font-size:12px;font-weight:600;color:var(--text-mute);display:block;margin-bottom:8px;">Module Access</label>
+        <div class="checkbox-grid">
+          <div class="checkbox-row"><input type="checkbox" id="emodJob" ${mods.includes("job")?"checked":""}><label for="emodJob">Sea Export Job</label></div>
+          <div class="checkbox-row"><input type="checkbox" id="emodAcct" ${mods.includes("accounting")?"checked":""}><label for="emodAcct">Accounting</label></div>
+          <div class="checkbox-row"><input type="checkbox" id="emodAdmin" ${mods.includes("admin")?"checked":""}><label for="emodAdmin">Admin</label></div>
+          <div class="checkbox-row"><input type="checkbox" id="emodReports" ${mods.includes("reports")?"checked":""}><label for="emodReports">Reports</label></div>
+          <div class="checkbox-row"><input type="checkbox" id="emodChatbot" ${mods.includes("chatbot")?"checked":""}><label for="emodChatbot">🤖 Chatbot</label></div>
+        </div>
+
+        <div class="checkbox-row" style="margin-top:10px;background:var(--gold-bg,#FDF2E3);border-radius:7px;padding:8px 10px;">
+          <input type="checkbox" id="echatbotOnlyBox" ${u.chatbot_only?"checked":""}>
+          <label for="echatbotOnlyBox">🔒 Restrict this user to ONLY the chatbot</label>
+        </div>
+
+        <label style="font-size:12px;font-weight:600;color:var(--text-mute);display:block;margin:16px 0 8px 0;">Permissions</label>
+        <div class="checkbox-row"><input type="checkbox" id="ecanDeleteBox" ${u.can_delete?"checked":""}><label for="ecanDeleteBox">Allow this user to delete records</label></div>
+        <div class="checkbox-row"><input type="checkbox" id="ecanExportBox" ${u.can_export?"checked":""}><label for="ecanExportBox">Can create/access Export jobs</label></div>
+        <div class="checkbox-row"><input type="checkbox" id="ecanImportBox" ${u.can_import?"checked":""}><label for="ecanImportBox">Can create/access Import jobs</label></div>
+        <div class="checkbox-row"><input type="checkbox" id="ecanApproveBox" ${u.can_approve?"checked":""}><label for="ecanApproveBox">Can approve / un-approve Charges &amp; Cost</label></div>
+
+        <div class="btn-row">
+          <button class="btn" id="cancelEditUser">Cancel</button>
+          <button class="btn btn-teal" id="saveEditUser">Save Changes</button>
+        </div>
+      </div>
+    </div>`;
+  document.getElementById("cancelEditUser").onclick = () => { root.innerHTML = ""; };
+  document.getElementById("echatbotOnlyBox").onchange = (e) => {
+    const lock = e.target.checked;
+    ["emodJob","emodAcct","emodAdmin","emodReports","emodChatbot"].forEach(id => {
+      const box = document.getElementById(id);
+      box.disabled = lock;
+      if (lock) box.checked = (id === "emodChatbot");
+    });
+  };
+  document.getElementById("saveEditUser").onclick = async () => {
+    const modules = [];
+    if (document.getElementById("emodJob").checked) modules.push("job");
+    if (document.getElementById("emodAcct").checked) modules.push("accounting");
+    if (document.getElementById("emodAdmin").checked) modules.push("admin");
+    if (document.getElementById("emodReports").checked) modules.push("reports");
+    if (document.getElementById("emodChatbot").checked) modules.push("chatbot");
+    const payload = {
+      name: document.getElementById("euName").value.trim(),
+      role: document.getElementById("euRole").value,
+      modules,
+      chatbot_only: document.getElementById("echatbotOnlyBox").checked,
+      can_delete: document.getElementById("ecanDeleteBox").checked,
+      can_export: document.getElementById("ecanExportBox").checked,
+      can_import: document.getElementById("ecanImportBox").checked,
+      can_approve: document.getElementById("ecanApproveBox").checked,
+    };
+    const pw = document.getElementById("euPassword").value;
+    if (pw) payload.password = pw;
+    try {
+      await api("PUT", `/api/users/${u.id}`, payload);
+      toast("User updated", "success");
+      root.innerHTML = "";
+      load();
+    } catch (e) { toast(e.message, "error"); }
+  };
+}
+window.openEditUserForm = openEditUserForm;
+
+window.toggleUser = async (id) => { await api("POST", `/api/users/${id}/toggle`); load(); };
+window.toggleDelete = async (id) => {
+  try { await api("POST", `/api/users/${id}/toggle-delete`); toast("Updated","success"); load(); }
+  catch(e){ toast(e.message,"error"); }
+};
+window.delUser = async (id) => {
+  if (!confirm("Delete this user?")) return;
+  try { await api("DELETE", `/api/users/${id}`); toast("User deleted","success"); load(); }
+  catch(e){ toast(e.message,"error"); }
+};
+(async function init() {
+  const me = await renderTopNav("admin/users.html");
+  allowDelete = canDelete(me);
+  load();
+})();
+</script>
+</body>
+</html>
